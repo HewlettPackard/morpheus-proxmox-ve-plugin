@@ -1044,7 +1044,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				log.debug("Resizing VM with specs: ${allocationSpecs}")
 				log.debug("Resizing vm: ${computeServer.name} with $server.coresPerSocket cores and $server.maxMemory memory")
 
-				ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory)
+				ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, [], [])
 			}
 		} catch (e) {
 			log.error("Unable to resize workload: ${e.message}", e)
