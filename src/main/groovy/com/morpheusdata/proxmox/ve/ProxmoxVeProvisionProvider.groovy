@@ -1155,24 +1155,23 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		List<ComputeServerInterface> newInterfaces = []
 		if (resizeRequest.interfacesAdd.each) {
 			int nicCounter = proxVMInterfaces.size()
-		resizeRequest.interfacesAdd.each { Map nic ->
-			log.info("NIC map: $nic")
-			def networkObj = context.services.network.get(nic.network.id)
-			Map newInterfaceProps = [
-					externalId		: "net$nicCounter",
-					name			: "net$nicCounter",
-					network   		: networkObj,
-					dhcp			: nic.network?.dhcpServer,
-					primaryInterface: false
-			]
-			if (nic.ipAddress) {
-				newInterfaceProps["ipAddress"] = nic.ipAddress
+			resizeRequest.interfacesAdd.each { Map nic ->
+				log.info("NIC map: $nic")
+				def networkObj = context.services.network.get(nic.network.id)
+				Map newInterfaceProps = [
+						externalId		: "net$nicCounter",
+						name			: "net$nicCounter",
+						network   		: networkObj,
+						dhcp			: nic.network?.dhcpServer,
+						primaryInterface: false
+				]
+				if (nic.ipAddress) {
+					newInterfaceProps["ipAddress"] = nic.ipAddress
+				}
+				nicCounter++
+				ComputeServerInterface newInterface = new ComputeServerInterface(newInterfaceProps)
+				newInterfaces << newInterface
 			}
-			nicCounter++
-			
-			ComputeServerInterface newInterface = new ComputeServerInterface(newInterfaceProps)
-			newInterfaces << newInterface
-		}
 			responses << ProxmoxApiComputeUtil.addVMNics(resizeClient, authConfigMap, newInterfaces, extNodeId, extServerId)
 			context.async.computeServer.computeServerInterface.create(newInterfaces, server).blockingGet()
 		}
