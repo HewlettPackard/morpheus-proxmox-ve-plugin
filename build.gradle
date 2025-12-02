@@ -14,6 +14,7 @@ buildscript {
 
 apply plugin: 'java'
 apply plugin: 'groovy'
+apply plugin: 'codenarc'
 apply plugin: 'idea'
 apply plugin: 'com.github.johnrengelman.shadow'
 apply plugin: 'asset-pipeline'
@@ -128,3 +129,31 @@ test {
 	}
 }
 tasks.assemble.dependsOn tasks.shadowJar
+
+// CodeNarc configuration for Groovy code quality checks
+codenarc {
+	toolVersion = '3.5.0'
+	configFile = file('config/codenarc/rules.groovy')
+	reportFormat = 'html'
+	ignoreFailures = true  // Don't fail build on violations
+}
+
+// Configure CodeNarc for main source set
+codenarcMain {
+	source = 'src/main/groovy'
+	reports {
+		html.required = true
+		html.outputLocation = file("${buildDir}/reports/codenarc/main.html")
+		xml.required = true
+		xml.outputLocation = file("${buildDir}/reports/codenarc/main.xml")
+		text.required = false
+	}
+}
+
+// Disable codenarcTest task (automatically created for test source set)
+tasks.named('codenarcTest').configure {
+	enabled = false
+}
+
+// Run CodeNarc as part of the check task
+check.dependsOn codenarcMain
