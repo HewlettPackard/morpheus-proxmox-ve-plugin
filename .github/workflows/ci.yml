@@ -57,8 +57,13 @@ jobs:
     - name: Run build
       run: ./gradlew build --no-daemon --stacktrace
 
+    - name: Install Trivy
+      run: |
+        wget https://github.com/aquasecurity/trivy/releases/download/v0.33.1/trivy_0.33.1_Linux-64bit.deb
+        sudo dpkg -i trivy_0.33.1_Linux-64bit.deb
+
     - name: Run Trivy vulnerability scan on shadow JAR
       run: |
-        SHADOW_JAR=$(find build/libs -name '*-all.jar' -type f)
+        SHADOW_JAR=$(find build/libs -name '*-all.jar' -type f | head -1)
         echo "Scanning JAR: $SHADOW_JAR"
-        docker run --rm -v "$(pwd):/workspace" -w /workspace aquasec/trivy:latest archive --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "/workspace/$SHADOW_JAR"
+        trivy fs --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed "$SHADOW_JAR"
