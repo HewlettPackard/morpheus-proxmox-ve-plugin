@@ -58,8 +58,7 @@ jobs:
       run: ./gradlew build --no-daemon --stacktrace
 
     - name: Install Trivy
-      run: |
-        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.33.1
+      uses: aquasecurity/trivy-action@0.33.1
 
     - name: Run Trivy vulnerability scan on shadow JAR
       run: |
