@@ -47,7 +47,6 @@ class VMSync {
         try {
             log.debug "Execute VMSync STARTED: ${cloud.id}"
             def cloudItems = ProxmoxApiComputeUtil.listVMs(apiClient, authConfig).data
-            
             // Sync BOTH managed and unmanaged VMs
             def domainRecords = context.async.computeServer.listIdentityProjections(cloud.id, null).filter {
                 it.computeServerTypeCode in ['proxmox-qemu-vm', 'proxmox-qemu-vm-unmanaged']
@@ -97,7 +96,9 @@ class VMSync {
             if (!parentServer) {
                 log.warn("Could not find parent server for VM ${cloudItem.name} on node ${cloudItem.node}")
             }
-            
+            def usedCpu = cloudItem.cpu  ?: 0
+            def usedCpuPercent = usedCpu * 100
+
             def newVM = new ComputeServer(
                 account          : cloud.account,
                 externalId       : cloudItem.vmid.toString(),
@@ -117,6 +118,9 @@ class VMSync {
                 maxMemory        : cloudItem.maxmem,
                 maxCores         : cloudItem.maxCores,
                 coresPerSocket   : cloudItem.coresPerSocket,
+                usedStorage      : cloudItem.disk?.toLong(),
+                usedMemory       : cloudItem.mem?.toLong(),
+                usedCpu          : usedCpuPercent.toLong(),
                 parentServer     : parentServer,
                 osType           : 'unknown',
                 serverOs         : new OsType(code: 'unknown'),
@@ -135,7 +139,7 @@ class VMSync {
 
     private updateMatchingVMs(List<SyncTask.UpdateItem<ComputeServer, Map>> updateItems) {
         log.debug("Updating ${updateItems.size()} existing VMs")
-        
+
         def updates = []
         
         try {
@@ -145,7 +149,8 @@ class VMSync {
                 def needsUpdate = false
 
                 ComputeCapacityInfo capacityInfo = existingItem.getComputeCapacityInfo() ?: new ComputeCapacityInfo()
-
+                def usedCpu = cloudItem.cpu  ?: 0
+                def usedCpuPercent = usedCpu * 100
                 // Fix power state comparison
                 def cloudPowerState = (cloudItem.status == 'running') ? ComputeServer.PowerState.on : ComputeServer.PowerState.off
 
@@ -154,7 +159,11 @@ class VMSync {
                         externalIp : cloudItem.ip,
                         internalIp : cloudItem.ip,
                         maxCores   : cloudItem.maxCores ?: cloudItem.maxcpu?.toLong(),
+                        maxStorage : cloudItem.maxdisk?.toLong(),
+                        usedStorage: cloudItem.disk?.toLong(),
                         maxMemory  : cloudItem.maxmem?.toLong(),
+                        usedMemory : cloudItem.mem?.toLong(),
+                        usedCpu    : usedCpuPercent.toLong(),
                         powerState : cloudPowerState
                 ]
 
@@ -164,7 +173,7 @@ class VMSync {
                         usedStorage: cloudItem.disk?.toLong(),
                         maxMemory  : cloudItem.maxmem?.toLong(),
                         usedMemory : cloudItem.mem?.toLong(),
-                        usedCpu    : cloudItem.cpu?.toLong()
+                        usedCpu    : usedCpuPercent.toLong(),
                 ]
 
                 if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, serverFieldValueMap)) {
