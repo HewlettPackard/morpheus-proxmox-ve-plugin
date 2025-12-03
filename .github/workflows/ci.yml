@@ -56,3 +56,12 @@ jobs:
 
     - name: Run build
       run: ./gradlew build --no-daemon --stacktrace
+
+    - name: Run Trivy filesystem scan
+      uses: aquasecurity/trivy-action@0.33.1
+      with:
+        scan-type: 'fs'
+        scan-ref: 'build/libs/'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        exit-code: '1'
