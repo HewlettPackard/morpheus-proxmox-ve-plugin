@@ -57,11 +57,12 @@ jobs:
     - name: Run build
       run: ./gradlew build --no-daemon --stacktrace
 
-    - name: Install Trivy
+    - name: Trivy scan
       uses: aquasecurity/trivy-action@0.33.1
-
-    - name: Run Trivy vulnerability scan on shadow JAR
-      run: |
-        SHADOW_JAR=$(find build/libs -name '*-all.jar' -type f | head -1)
-        echo "Scanning JAR: $SHADOW_JAR"
-        trivy fs --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed "$SHADOW_JAR"
+      with:
+        scan-type: 'rootfs'
+        scan-ref: 'build/libs/'
+        ignore-unfixed: true
+        format: 'table'
+        exit-code: '1'
+        severity: 'CRITICAL,HIGH'
