@@ -59,9 +59,7 @@ jobs:
 
     - name: Install Trivy
       run: |
-        wget https://github.com/aquasecurity/trivy/releases/download/v0.33.1/trivy_0.33.1_Linux-64bit.tar.gz
-        tar zxvf trivy_0.33.1_Linux-64bit.tar.gz
-        sudo mv trivy /usr/local/bin/
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.33.1
 
     - name: Run Trivy vulnerability scan on shadow JAR
       run: |
