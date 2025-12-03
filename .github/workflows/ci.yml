@@ -57,6 +57,9 @@ jobs:
     - name: Run build
       run: ./gradlew build --no-daemon --stacktrace
 
+    - name: List JAR files
+      run: ls -lah build/libs/
+
     - name: Run Trivy filesystem scan
       uses: aquasecurity/trivy-action@0.33.1
       with:
