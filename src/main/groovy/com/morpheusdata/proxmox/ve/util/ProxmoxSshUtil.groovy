@@ -9,15 +9,6 @@ import com.morpheusdata.model.TaskResult
 import com.morpheusdata.model.VirtualImage
 import com.morpheusdata.model.provisioning.WorkloadRequest
 import com.morpheusdata.response.ServiceResponse
-package com.morpheusdata.proxmox.ve.util
-
-import com.morpheusdata.core.MorpheusContext
-import com.morpheusdata.core.util.HttpApiClient
-import com.morpheusdata.model.Cloud
-import com.morpheusdata.model.ComputeServer
-import com.morpheusdata.model.LogLevel
-import com.morpheusdata.model.TaskResult
-import com.morpheusdata.model.VirtualImage
 import com.morpheusdata.model.provisioning.WorkloadRequest
 import com.morpheusdata.response.ServiceResponse
 import groovy.util.logging.Slf4j
