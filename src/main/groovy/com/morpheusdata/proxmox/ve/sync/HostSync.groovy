@@ -103,6 +103,8 @@ class HostSync {
                 def usedMem = cloudItem.mem ?: 0
                 def maxDisk = cloudItem.maxdisk ?: 0
                 def usedDisk = cloudItem.disk ?: 0
+                def usedCpu = cloudItem.cpu ?: 0
+                def usedCpuPercent = usedCpu * 100
                 
                 def serverConfig = [
                         account          : cloud.owner,
@@ -134,7 +136,7 @@ class HostSync {
                         usedStorage: usedDisk.toLong(),
                         maxMemory  : maxMem.toLong(),
                         usedMemory : usedMem.toLong(),
-                        usedCpu    : maxCpu.toLong(),
+                        usedCpu    : usedCpuPercent.toLong(),
                 ]
 
                 ComputeServer newServer = new ComputeServer(serverConfig)
@@ -170,6 +172,8 @@ class HostSync {
                 def usedMem = cloudItem.mem ?: 0
                 def maxDisk = cloudItem.maxdisk ?: 0
                 def usedDisk = cloudItem.disk ?: 0
+                def usedCpu = cloudItem.cpu  ?: 0
+                def usedCpuPercent = usedCpu * 100
 
                 Map serverFieldValueMap = [
                         account     : cloud.owner,
@@ -188,7 +192,7 @@ class HostSync {
                         usedStorage : usedDisk.toLong(),
                         maxMemory   : maxMem.toLong(),
                         usedMemory  : usedMem.toLong(),
-                        usedCpu     : maxCpu.toLong(),
+                        usedCpu     : usedCpuPercent.toLong(),
                         powerState  : (cloudItem.status == 'online') ? ComputeServer.PowerState.on : ComputeServer.PowerState.off
                 ]
 
@@ -198,7 +202,7 @@ class HostSync {
                         usedStorage: usedDisk.toLong(),
                         maxMemory  : maxMem.toLong(),
                         usedMemory : usedMem.toLong(),
-                        usedCpu    : maxCpu.toLong(),
+                        usedCpu    : usedCpuPercent.toLong(),
                 ]
 
                 if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, serverFieldValueMap) ||

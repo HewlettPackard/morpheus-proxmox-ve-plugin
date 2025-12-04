@@ -1092,7 +1092,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 						externalId       : "scsi$nextScsi",
 						maxStorage       : newVMDisk.maxStorage,
 						refType          : "ComputeServer",
-						refId            : workload.server.id,
+						refId            : server.id,
 						name             : newVMDisk.name
 				]
 				if (newVMDisk.datastoreId == "auto") {
@@ -1157,18 +1157,18 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			int nicCounter = proxVMInterfaces.size()
 			resizeRequest.interfacesAdd.each { Map nic ->
 				log.info("NIC map: $nic")
+				def networkObj = context.services.network.get(nic.network.id)
 				Map newInterfaceProps = [
 						externalId		: "net$nicCounter",
 						name			: "net$nicCounter",
-						network   		: context.services.network.get(nic.network.id),
-						dhcp			: nic.ntwork.dhcpServer,
+						network   		: networkObj,
+						dhcp			: nic.network?.dhcpServer,
 						primaryInterface: false
 				]
 				if (nic.ipAddress) {
 					newInterfaceProps["ipAddress"] = nic.ipAddress
 				}
 				nicCounter++
-
 				ComputeServerInterface newInterface = new ComputeServerInterface(newInterfaceProps)
 				newInterfaces << newInterface
 			}
@@ -1209,5 +1209,13 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		return true
 	}
 
+	@Override
+	Boolean hasComputeZonePools() {
+		return true
+	}
 
+	@Override
+	Boolean computeZonePoolRequired() {
+		return false
+	}
 }

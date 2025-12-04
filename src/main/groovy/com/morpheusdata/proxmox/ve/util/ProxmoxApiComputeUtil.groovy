@@ -319,7 +319,6 @@ class ProxmoxApiComputeUtil {
         def nextId = callListApiV2(client, "cluster/nextid", authConfig).data
         log.debug("Next VM Id is: $nextId")
         StorageVolume rootVolume = volumes.find { it.rootVolume }
-
         try {
             def tokenCfg = getApiV2Token(authConfig).data
             rtn.data = []
@@ -340,6 +339,9 @@ class ProxmoxApiComputeUtil {
                     contentType: ContentType.APPLICATION_JSON,
                     ignoreSSL: true
             ]
+
+            log.debug("Selected Resource Pool Name: ${server?.resourcePool?.name}")
+            if (server?.resourcePool?.name) opts.body.pool = server.resourcePool.name
 
             log.debug("Cloning template $templateId to VM $name($nextId) on node $nodeId")
             def results = client.callJsonApi(
@@ -550,7 +552,8 @@ class ProxmoxApiComputeUtil {
                             vmid: nextId,
                             node: nodeId,
                             name: imageName.replaceAll(/\s+/, ''),
-                            template: true
+                            template: true,
+                            scsihw: "virtio-scsi-single"
                     ],
                     contentType: ContentType.APPLICATION_JSON,
                     ignoreSSL: true
@@ -801,11 +804,20 @@ class ProxmoxApiComputeUtil {
             if (vm?.template == 0 && vm?.type == "qemu") {
                 def vmAgentInfo = callListApiV2(client, "nodes/$vm.node/qemu/$vm.vmid/agent/network-get-interfaces", authConfig)
                 vm.ip = "0.0.0.0"
-                if (vmAgentInfo.success) {
-                    def results = vmAgentInfo.data?.result
-                    results.each {
-                        if (it."ip-address-type" == "ipv4" && it."ip-address" != "127.0.0.1" && vm.ip == "0.0.0.0") {
-                            vm.ip = it."ip-address"
+                if (vmAgentInfo.success && vmAgentInfo.data?.result) {
+                    def interfaces = vmAgentInfo.data.result
+                    // Iterate through each network interface
+                    interfaces.each { iface ->
+                        if (iface.'ip-addresses') {
+                            // Iterate through each IP address in the interface
+                            iface.'ip-addresses'.each { ipAddr ->
+                                def ipAddress = ipAddr.'ip-address'
+                                def ipType = ipAddr.'ip-address-type'
+                                if (ipType == "ipv4" && ipAddress != "127.0.0.1" && vm.ip == "0.0.0.0") {
+                                    log.debug("Setting IP address for VM ${vm.vmid}: ${ipAddress}")
+                                    vm.ip = ipAddress
+                                }
+                            }
                         }
                     }
                 }
