@@ -308,17 +308,25 @@ class ProxmoxApiComputeUtil {
 
 
     static cloneTemplate(HttpApiClient client, Map authConfig, String templateId, String name, String nodeId, ComputeServer server) {
-        //Long vcpus, Long ram, List<StorageVolume> volumes, List<String> targetNetworks) {
-        log.debug("cloneTemplate: $templateId")
-
         Long vcpus = server.maxCores
         Long ram = server.maxMemory
         List<StorageVolume> volumes = server.volumes
         List<ComputeServerInterface> nics = server.interfaces
         def rtn = new ServiceResponse(success: true)
         def nextId = callListApiV2(client, "cluster/nextid", authConfig).data
-        log.debug("Next VM Id is: $nextId")
         StorageVolume rootVolume = volumes.find { it.rootVolume }
+        
+        // Find the actual node where the template resides (multi-node cluster support)
+        String templateNode = findNodeForVM(client, authConfig, templateId)
+        if (!templateNode) {
+            log.error("Cannot find template $templateId on any node in the cluster")
+            return ServiceResponse.error("Template $templateId not found on any node in the cluster")
+        }
+        
+        if (templateNode != nodeId) {
+            log.info("Template $templateId is on node $templateNode, but cloning to node $nodeId (cross-node clone)")
+        }
+        
         try {
             def tokenCfg = getApiV2Token(authConfig).data
             rtn.data = []
@@ -330,7 +338,7 @@ class ProxmoxApiComputeUtil {
                     ],
                     body: [
                             newid: nextId,
-                            node: nodeId,
+                            target: nodeId,  // Target node for the new VM
                             vmid: templateId,
                             name: name,
                             full: true,
@@ -340,42 +348,66 @@ class ProxmoxApiComputeUtil {
                     ignoreSSL: true
             ]
 
-            log.debug("Selected Resource Pool Name: ${server?.resourcePool?.name}")
-            if (server?.resourcePool?.name) opts.body.pool = server.resourcePool.name
-
-            log.debug("Cloning template $templateId to VM $name($nextId) on node $nodeId")
+            log.info("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId using storage '${rootVolume.datastore.externalId}'")
+            log.info("Clone API endpoint: ${authConfig.apiUrl}${authConfig.v2basePath}/nodes/$templateNode/qemu/$templateId/clone")
+            log.info("Clone request body: $opts.body")
+            
+            // Clone from the node where template actually resides
             def results = client.callJsonApi(
                     (String) authConfig.apiUrl,
-                    "${authConfig.v2basePath}/nodes/$nodeId/qemu/$templateId/clone",
+                    "${authConfig.v2basePath}/nodes/$templateNode/qemu/$templateId/clone",
                     null, null,
                     new HttpApiClient.RequestOptions(opts),
                     'POST'
             )
 
-            def resultData = new JsonSlurper().parseText(results.content)
+            log.info("Clone API response - success: ${results?.success}, hasErrors: ${results?.hasErrors()}, errorCode: ${results?.errorCode}")
+            log.info("Clone API response content: ${results?.content}")
+            log.info("Clone API response data: ${results?.data}")
 
-            if(results?.success && !results?.hasErrors()) {
-                rtn.success = true
-                rtn.data = resultData
-
-                ServiceResponse cloneWaitResult = waitForCloneToComplete(new HttpApiClient(), authConfig, templateId, nextId, nodeId, 3600L)
-
-                if (!cloneWaitResult?.success) {
-                    return ServiceResponse.error("Error Provisioning VM. Wait for clone error: ${cloneWaitResult}")
-                }
-
-                log.debug("Resizing newly cloned VM. Spec: CPU: $vcpus,\n RAM: $ram,\n Volumes: $volumes,\n NICs: $nics")
-                ServiceResponse rtnResize = resizeVM(new HttpApiClient(), authConfig, nodeId, nextId, vcpus, ram, volumes, nics)
-
-                if (!rtnResize?.success) {
-                    return ServiceResponse.error("Error Sizing VM Compute. Resize compute error: ${rtnResize}")
-                }
-
-                rtn.data.vmId = nextId
-            } else {
-                rtn.msg = "Provisioning failed: ${results.toMap()}"
-                rtn.success = false
+            if(!results?.success || results?.hasErrors()) {
+                def errorMsg = "Clone API call failed - success: ${results?.success}, hasErrors: ${results?.hasErrors()}, content: ${results?.content}"
+                log.error(errorMsg)
+                return ServiceResponse.error(errorMsg)
             }
+
+            def resultData = null
+            try {
+                resultData = new JsonSlurper().parseText(results.content)
+                log.info("Parsed clone response data: $resultData")
+            } catch (e) {
+                log.error("Failed to parse clone response JSON: ${e.message}")
+                log.error("Raw content was: ${results.content}")
+                return ServiceResponse.error("Failed to parse clone API response: ${e.message}")
+            }
+            
+            // Check if Proxmox returned an error in the response data
+            if (resultData?.errors) {
+                def errorMsg = "Proxmox clone failed: ${resultData}"
+                log.error(errorMsg)
+                return ServiceResponse.error(errorMsg)
+            }
+
+            rtn.success = true
+            rtn.data = [vmId: nextId, apiResult: resultData]
+
+            // Wait for clone to complete - check on target node where new VM will be created
+            log.info("Waiting for clone task to complete for VM $nextId on node $nodeId")
+            ServiceResponse cloneWaitResult = waitForCloneToComplete(new HttpApiClient(), authConfig, templateId, nextId, nodeId, 3600L)
+
+            if (!cloneWaitResult?.success) {
+                log.error("Clone wait failed for VM $nextId: ${cloneWaitResult.msg}")
+                return ServiceResponse.error("Error Provisioning VM. Wait for clone error: ${cloneWaitResult.msg}")
+            }
+
+            ServiceResponse rtnResize = resizeVM(new HttpApiClient(), authConfig, nodeId, nextId, vcpus, ram, volumes, nics)
+
+            if (!rtnResize?.success) {
+                log.error("Resize failed for VM $nextId: ${rtnResize.msg}")
+                return ServiceResponse.error("Error Sizing VM Compute. Resize compute error: ${rtnResize.msg}")
+            }
+
+            log.info("Successfully cloned and configured VM $nextId on node $nodeId")
         } catch(e) {
             log.error "Error Provisioning VM: ${e}", e
             return ServiceResponse.error("Error Provisioning VM: ${e}")
@@ -387,10 +419,27 @@ class ProxmoxApiComputeUtil {
 
 
     static List<Map> getExistingVMStorage(HttpApiClient client, Map authConfig, String nodeId, String vmId) {
-
-        def vmConfigInfo = callListApiV2(client, "nodes/$nodeId/qemu/$vmId/config", authConfig).data
+        // First try the provided node
+        def vmConfigInfo = callListApiV2(client, "nodes/$nodeId/qemu/$vmId/config", authConfig)
+        
+        // If VM/template not found on the provided node, search across cluster
+        if (!vmConfigInfo.success || vmConfigInfo.hasErrors()) {
+            log.warn("VM/template $vmId not found on node $nodeId, searching other nodes in cluster...")
+            String actualNode = findNodeForVM(client, authConfig, vmId)
+            if (actualNode && actualNode != nodeId) {
+                log.info("Found VM/template $vmId on node $actualNode instead of $nodeId")
+                vmConfigInfo = callListApiV2(client, "nodes/$actualNode/qemu/$vmId/config", authConfig)
+            }
+        }
+        
+        if (!vmConfigInfo.success || !vmConfigInfo.data) {
+            log.error("Failed to retrieve VM/template $vmId configuration from any node")
+            return []
+        }
+        
+        def vmConfigData = vmConfigInfo.data
         def validBootDisks = ["scsi0", "virtio0", "sata0", "ide0"]
-        def bootEntries = vmConfigInfo.boot?.trim()?.replaceAll("order=", "")?.split(/[;,\s]+/)
+        def bootEntries = vmConfigData.boot?.trim()?.replaceAll("order=", "")?.split(/[;,\s]+/)
         def bootDisk = ""
 
         def extractDiskKeys  = { config ->
@@ -402,7 +451,7 @@ class ProxmoxApiComputeUtil {
         }
         List vmStorageList = []
 
-        def vmDiskKeys = extractDiskKeys(vmConfigInfo)
+        def vmDiskKeys = extractDiskKeys(vmConfigData)
 
         //Boot disk specified in config boot order
         bootEntries.each { String diskLabel ->
@@ -424,14 +473,37 @@ class ProxmoxApiComputeUtil {
             throw new Exception("Boot disk for VM not found!")
         }
 
-        vmStorageList << [ label: "$bootDisk", config: vmConfigInfo[bootDisk], isRoot: true ]
+        vmStorageList << [ label: "$bootDisk", config: vmConfigData[bootDisk], isRoot: true ]
         vmDiskKeys.each { String diskLabel ->
             if (diskLabel != bootDisk) {
-                vmStorageList << [ label: "$diskLabel", config: vmConfigInfo[diskLabel], isRoot: false ]
+                vmStorageList << [ label: "$diskLabel", config: vmConfigData[diskLabel], isRoot: false ]
             }
         }
 
         return vmStorageList
+    }
+    /**
+     * Find which node a VM or template resides on in a multi-node cluster
+     * @param client HttpApiClient instance
+     * @param authConfig Authentication configuration
+     * @param vmId The VM or template ID to locate
+     * @return The node name where the VM/template resides, or null if not found
+     */
+    static String findNodeForVM(HttpApiClient client, Map authConfig, String vmId) {
+        try {
+            def qemuResources = callListApiV2(client, "cluster/resources", authConfig)
+            def vmResource = qemuResources.data.find { it.vmid?.toString() == vmId?.toString() && it.type == "qemu" }
+            if (vmResource?.node) {
+                log.info("VM/template $vmId found on node: ${vmResource.node}")
+                return vmResource.node
+            } else {
+                log.warn("VM/template $vmId not found in cluster resources")
+                return null
+            }
+        } catch (e) {
+            log.error("Error finding node for VM $vmId: ${e}", e)
+            return null
+        }
     }
 
 
