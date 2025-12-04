@@ -93,8 +93,9 @@ class DatastoreSync {
                 Datastore add = new Datastore(datastoreConfig)
                 adds << add
             }
-            if (adds.size() > 1) {
+            if (adds.size() > 0) {
                 morpheusContext.async.cloud.datastore.bulkCreate(adds).blockingGet()
+                log.info("Added ${adds.size()} datastores to cloud ${cloud.name}")
             }
         } catch (e) {
             log.error "Error in addMissingDatastores: ${e}", e
