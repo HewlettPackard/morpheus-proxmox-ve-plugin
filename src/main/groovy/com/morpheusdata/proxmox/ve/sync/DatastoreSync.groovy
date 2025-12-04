@@ -141,6 +141,6 @@ class DatastoreSync {
 
     private removeMissingDatastores(List<DatastoreIdentity> removeItems) {
         log.info("Removing Datastores that no longer exist")
-        morpheusContext.async.cloud.datastore.bulkRemove(removeItems).blockingGet()
+        morpheusContext.services.cloud.datastore.bulkRemove(removeItems)
     }
 }
