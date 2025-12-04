@@ -24,7 +24,6 @@ class ProxmoxVePlugin extends Plugin {
     @Override
     void initialize() {
         this.setName("Proxmox VE")
-        // Register providers and initialize plugin
         this.registerProvider(new ProxmoxVeCloudProvider(this, this.morpheus))
         this.registerProvider(new ProxmoxVeProvisionProvider(this, this.morpheus))
         this.registerProvider(new ProxmoxVeOptionSourceProvider(this, this.morpheus))

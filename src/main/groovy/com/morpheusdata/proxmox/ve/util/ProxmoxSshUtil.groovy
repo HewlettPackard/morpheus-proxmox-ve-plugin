@@ -72,8 +72,8 @@ class ProxmoxSshUtil {
             log.debug("Disk ImportDisk SSH Task \"qm importdisk $imageExternalId $REMOTE_IMAGE_DIR/$fileName $targetDS\" results: ${diskCreateOut.toMap().toString()}")
 
             //Mount the disk
-            log.debug("Executing DiskMount SSH Task \"qm set $imageExternalId --scsi0 $targetDS:vm-$imageExternalId-disk-0 --boot order=scsi0\"")
-            def diskMountOut = context.executeSshCommand(hvNode.sshHost, 22, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 $targetDS:vm-$imageExternalId-disk-0 --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+            log.debug("Executing DiskMount SSH Task \"qm set $imageExternalId --scsi0 $targetDS:vm-$imageExternalId-disk-0\"")
+            def diskMountOut = context.executeSshCommand(hvNode.sshHost, 22, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 $targetDS:vm-$imageExternalId-disk-0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
             log.debug("Disk Mount SSH Task \"qm set $imageExternalId --scsi0 $targetDS:vm-$imageExternalId-disk-0\" results: ${diskMountOut.toMap().toString()}")
         } finally {
             context.releaseLock(lockKey, [lock:lock]).blockingGet()
