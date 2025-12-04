@@ -340,6 +340,9 @@ class ProxmoxApiComputeUtil {
                     ignoreSSL: true
             ]
 
+            log.debug("Selected Resource Pool Name: ${server?.resourcePool?.name}")
+            if (server?.resourcePool?.name) opts.body.pool = server.resourcePool.name
+
             log.debug("Cloning template $templateId to VM $name($nextId) on node $nodeId")
             def results = client.callJsonApi(
                     (String) authConfig.apiUrl,

@@ -1210,5 +1210,13 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		return true
 	}
 
+	@Override
+	Boolean hasComputeZonePools() {
+		return true
+	}
 
+	@Override
+	Boolean computeZonePoolRequired() {
+		return false
+	}
 }
