@@ -3,6 +3,11 @@ package com.morpheusdata.proxmox.ve
 import com.morpheusdata.PrepareHostResponse
 import com.morpheusdata.core.AbstractProvisionProvider
 import com.morpheusdata.core.MorpheusContext
+package com.morpheusdata.proxmox.ve
+
+import com.morpheusdata.PrepareHostResponse
+import com.morpheusdata.core.AbstractProvisionProvider
+import com.morpheusdata.core.MorpheusContext
 import com.morpheusdata.core.Plugin
 import com.morpheusdata.core.data.DataFilter
 import com.morpheusdata.core.data.DataQuery
@@ -44,15 +49,10 @@ import com.morpheusdata.proxmox.ve.util.ProxmoxApiComputeUtil
 import com.morpheusdata.proxmox.ve.util.ProxmoxMiscUtil
 import groovy.util.logging.Slf4j
 
-/**
- * @author Neil van Rensburg
- */
-
 @Slf4j
-class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements VmProvisionProvider, WorkloadProvisionProvider, WorkloadProvisionProvider.ResizeFacet, HostProvisionProvider.ResizeFacet { //, ProvisionProvider.BlockDeviceNameFacet {
-	public static final String PROVISION_PROVIDER_CODE = 'proxmox-provision-provider'
-
-	protected MorpheusContext context
+class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements VmProvisionProvider, WorkloadProvisionProvider, WorkloadProvisionProvider.ResizeFacet, HostProvisionProvider.ResizeFacet {
+// ...existing code...
+}
 	protected ProxmoxVePlugin plugin
 
 	public ProxmoxVeProvisionProvider(ProxmoxVePlugin plugin, MorpheusContext ctx) {
