@@ -12,6 +12,7 @@ import com.morpheusdata.model.NetworkSubnet
 import com.morpheusdata.model.NetworkType
 import com.morpheusdata.model.OptionType
 import com.morpheusdata.response.ServiceResponse
+import com.morpheusdata.views.Renderer
 import groovy.util.logging.Slf4j
 
 @Slf4j
@@ -201,5 +202,8 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 		return ServiceResponse.success();
 	}
 
-
+	@Override
+	Renderer<?> getRenderer() {
+		return null
+	}
 }
