@@ -1006,13 +1006,26 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			def allocationSpecs = [externalId: computeServer.externalId, maxMemory: requestedMemory, maxCpu: requestedCores]
 
 			if (neededMemory > 100000000l || neededMemory < -100000000l || neededCores != 0) {
-				log.debug("Resizing VM with specs: ${allocationSpecs}")
-				log.debug("Resizing vm: ${computeServer.name} with $server.coresPerSocket cores and $server.maxMemory memory")
-				ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, [], [])
+				def resizeResult = ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, computeServer.volumes?.toList() ?: [], computeServer.interfaces?.toList() ?: [])
+
+				if (!resizeResult.success) {
+					log.error("Resize API call failed: ${resizeResult.msg}")
+					computeServer.status = 'provisioned'
+					computeServer.statusMessage = "Resize failed: ${resizeResult.msg}"
+					saveAndGet(computeServer)
+					return new ServiceResponse(success: false, msg: "Resize failed: ${resizeResult.msg}")
+				}
+
+				computeServer.maxMemory = requestedMemory
+				computeServer.maxCores = requestedCores
+				computeServer.coresPerSocket = 1
+			} else {
+				log.info("No resize needed - changes too small (neededMemory: ${neededMemory}, neededCores: ${neededCores})")
+			}
+
 			computeServer.status = 'provisioned'
 			computeServer.statusMessage = null
 			computeServer = saveAndGet(computeServer)
-		}
 		} catch (e) {
 			log.error("Exception during resize workload: ${e.message}", e)
 			computeServer.status = 'provisioned'
