@@ -2,6 +2,7 @@ package com.morpheusdata.proxmox.ve.sync
 
 
 import com.morpheusdata.core.MorpheusContext
+import com.morpheusdata.core.data.DataQuery
 import com.morpheusdata.core.providers.CloudProvider
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.core.util.SyncTask
@@ -30,7 +31,7 @@ class VMSync {
     private HttpApiClient apiClient
     private CloudProvider cloudProvider
     private Map authConfig
-
+    private static final String UNMANAGED_SERVER_CODE = 'proxmox-qemu-vm-unmanaged'
 
     VMSync(ProxmoxVePlugin proxmoxVePlugin, Cloud cloud, HttpApiClient apiClient, CloudProvider cloudProvider) {
         this.@plugin = proxmoxVePlugin
@@ -200,18 +201,18 @@ class VMSync {
 
 
     private removeMissingVMs(List<ComputeServerIdentityProjection> removeItems) {
-        log.info("Removing ${removeItems.size()} VMs that no longer exist in Proxmox...")
-        
-        removeItems.each { vm ->
-            log.info("Removing orphaned VM: ${vm.name} (ID: ${vm.id}, External ID: ${vm.externalId}, Type: ${vm.computeServerTypeCode})")
-        }
-        
-        if (removeItems) {
+        def removeUnmanagedItems = context.services.computeServer.listIdentityProjections(
+                new DataQuery().withFilter("id", "in", removeItems.collect { it.id })
+                        .withFilter("computeServerType.code", UNMANAGED_SERVER_CODE)
+        )
+        log.info("Removing ${removeUnmanagedItems.size()} VMs that no longer exist in Proxmox...")
+        removeUnmanagedItems.each { vm ->
+            log.debug("Removing orphaned VM: ${vm.name} (ID: ${vm.id}, External ID: ${vm.externalId}, Type: ${vm.computeServerTypeCode})")
             try {
-                def result = context.async.computeServer.bulkRemove(removeItems).blockingGet()
-                log.info("Bulk remove completed successfully")
+                context.services.computeServer.remove(vm)
+                log.info("Successfully removed VM: ${vm.name} (ID: ${vm.id})")
             } catch (e) {
-                log.error("Error removing VMs: ${e}", e)
+                log.error("Error removing VM ${vm.name} (ID: ${vm.id}): ${e}", e)
             }
         }
     }
