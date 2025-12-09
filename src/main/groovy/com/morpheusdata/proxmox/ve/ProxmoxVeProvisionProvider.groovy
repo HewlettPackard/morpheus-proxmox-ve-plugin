@@ -141,7 +141,10 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	 */
 	@Override
 	Icon getCircularIcon() {
-		return new Icon(path:'proxmox-circular-icon.svg', darkPath:'proxmox-circular-icon-dark.svg')
+		return new Icon(
+			path: Assets.PROXMOX_LOGO_STACKED.path,
+			darkPath: Assets.PROXMOX_LOGO_STACKED_INVERTED.path
+		)
 	}
 
 	/**
