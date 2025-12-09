@@ -157,7 +157,7 @@ class ProxmoxVeCloudProvider implements CloudProvider {
 				fieldCode: 'gomorpheus.optiontype.HostUserName',
 				fieldName: 'hostUsername',
 				inputType: OptionType.InputType.TEXT,
-				localCredential: true,
+				localCredential: false,
 				required: true
 		)
 		options << new OptionType(
@@ -169,7 +169,7 @@ class ProxmoxVeCloudProvider implements CloudProvider {
 				fieldCode: 'gomorpheus.optiontype.HostPassword',
 				fieldName: 'hostPassword',
 				inputType: OptionType.InputType.PASSWORD,
-				localCredential: true,
+				localCredential: false,
 				required: true
 		)
 
