@@ -537,8 +537,8 @@ class ProxmoxApiComputeUtil {
      * Find which node a VM or template resides on in a multi-node cluster
      * 
      * Uses /cluster/resources?type=vm endpoint to fetch only QEMU VMs/templates,
-     * then filters client-side by vmid. Falls back to checking each node individually
-     * if cluster/resources is not available.
+     * then filters client-side by vmid. Falls back to all resources if type parameter fails,
+     * and ultimately checks each node individually if cluster query fails.
      * 
      * Proxmox API limitation: There is NO endpoint like /api2/json/qemu/{vmid}
      * All VM queries require: /api2/json/nodes/{node}/qemu/{vmid}
@@ -550,17 +550,16 @@ class ProxmoxApiComputeUtil {
      */
     static String findNodeForVM(HttpApiClient client, Map authConfig, String vmId) {
         try {
-            // Use type=vm to reduce result set (documented parameter)
-            // Filter by vmid client-side since vmid parameter is not documented
+            // Try with type=vm filter first for better performance
             def qemuResources = callListApiV2(client, "cluster/resources?type=vm", authConfig)
             
-            // Check if API returned error or no data
-            if (!qemuResources.success || qemuResources.hasErrors() || !qemuResources.data) {
+            // If type parameter not supported, fall back to unfiltered query
+            if (!qemuResources?.success || qemuResources?.hasErrors()) {
                 log.debug("cluster/resources?type=vm not supported, trying without filter")
                 qemuResources = callListApiV2(client, "cluster/resources", authConfig)
             }
             
-            if (qemuResources?.data) {
+            if (qemuResources?.success && qemuResources?.data) {
                 // Filter for the specific VM/template (client-side filtering)
                 def vmResource = qemuResources.data.find { 
                     it.type == "qemu" && it.vmid?.toString() == vmId?.toString()
@@ -1325,6 +1324,14 @@ class ProxmoxApiComputeUtil {
         def rtn = new ServiceResponse(success: false)
         try {
             rtn.data = []
+            
+            // Separate path and query string for proper HTTP client handling
+            def pathParts = path.split('\\?', 2)
+            def actualPath = "${authConfig.v2basePath}/${pathParts[0]}"
+            def queryString = pathParts.length > 1 ? pathParts[1] : null
+            
+            log.debug("callListApiV2: actualPath=${actualPath}, queryString=${queryString}")
+            
             def opts = new HttpApiClient.RequestOptions(
                     headers: [
                         'Content-Type': 'application/json',
@@ -1334,7 +1341,12 @@ class ProxmoxApiComputeUtil {
                     contentType: ContentType.APPLICATION_JSON,
                     ignoreSSL: true
             )
-            def results = client.callJsonApi(authConfig.apiUrl, "${authConfig.v2basePath}/${path}", null, null, opts, 'GET')
+            
+            // Use 6-parameter version if we have a query string, otherwise use 4-parameter version
+            def results = queryString ? 
+                client.callJsonApi(authConfig.apiUrl, actualPath, queryString, null, opts, 'GET') :
+                client.callJsonApi(authConfig.apiUrl, actualPath, null, null, opts, 'GET')
+            
             def resultData = results.toMap().data.data
             log.debug("callListApiV2 results: ${resultData}")
             if(results?.success && !results?.hasErrors()) {
