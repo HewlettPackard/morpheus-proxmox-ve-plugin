@@ -341,7 +341,10 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		List<Map> wizardInterfaces = opts.networkInterfaces
 		List<Map> instanceDisks = opts.volumes
 		Long imageId = opts.config.imageId as Long
+		
+		log.info("Validation - User selected target node: ${opts.config.proxmoxNode}")
 		Map proxmoxNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, opts.config.proxmoxNode).data
+		log.info("Validation - Fetched node data for: ${proxmoxNode?.node}, datastores: ${proxmoxNode?.datastores}")
 
 		//get proxmox datastores from API using morpheus datastore IDs from wizard
 		List<String> wizardDatastoreExternalIds = []
@@ -351,11 +354,13 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			}
 		}
 		List<Map> wizardDatastores = ProxmoxApiComputeUtil.getProxmoxDatastoresById(client, authConfig, wizardDatastoreExternalIds).data
+		log.info("Validation - User selected datastores: ${wizardDatastores?.collect { it.storage }}")
 
 		//get virtualImage Datastores
 		def virtualImage = context.async.virtualImage.listById([imageId]).blockingFirst()
 		def virtualImageExternalId = virtualImage.externalId as Long
 		def proxmoxTemplate = ProxmoxApiComputeUtil.getTemplateById(client, authConfig, virtualImageExternalId).data
+		log.info("Validation - Template '${virtualImage.name}' (ID: ${virtualImageExternalId}) is on node: ${proxmoxTemplate?.node}")
 
 		log.debug("PROXMOX TEMPLATE IS: $proxmoxTemplate")
 		log.debug("SELECTED DATASTORES: $wizardDatastores")
@@ -377,6 +382,20 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				// Get datastores available on the template's source node
 				Map templateNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, proxmoxTemplate.node).data
 				
+				// If template doesn't have datastores populated, try to fetch them
+				if (!proxmoxTemplate.datastores || proxmoxTemplate.datastores.isEmpty()) {
+					log.warn("Template datastores not populated, attempting to fetch from Proxmox API")
+					def freshTemplate = ProxmoxApiComputeUtil.getTemplateById(client, authConfig, virtualImage.externalId.toLong())
+					if (freshTemplate?.success && freshTemplate?.data?.datastores) {
+						proxmoxTemplate.datastores = freshTemplate.data.datastores
+						log.info("Fetched template datastores: ${proxmoxTemplate.datastores}")
+					} else {
+						log.error("Unable to determine template datastores for cross-node validation")
+						def errorMsg = "Cannot perform cross-node clone: Unable to determine storage used by template '${virtualImage.name}' on node '${proxmoxTemplate.node}'."
+						rtn.addError("imageId", errorMsg)
+					}
+				}
+				
 				proxmoxTemplate.datastores.each { String templateDS ->
 					// Check if this datastore exists on both source and target nodes
 					boolean onSourceNode = templateNode?.datastores?.contains(templateDS)
@@ -389,10 +408,27 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				}
 				
 				if (!hasSharedStorage) {
-					def templateDSList = proxmoxTemplate.datastores.join(", ")
-					log.error("Error provisioning: Template '${virtualImage.name}' is on node '${proxmoxTemplate.node}' with datastores [$templateDSList] not shared with target node '${opts.config.proxmoxNode}'.")
-					def errorMsg = "Template '${virtualImage.name}' uses non-shared storage [$templateDSList] on node '${proxmoxTemplate.node}'. Cannot clone to node '${opts.config.proxmoxNode}' without shared storage."
-					rtn.addError("imageId", errorMsg)
+					// No shared storage - check if we can upload/create template on target node instead
+					def cloudFiles = context.async.virtualImage.getVirtualImageFiles(virtualImage).blockingGet()
+					boolean hasUploadableImage = cloudFiles?.any { cloudFile ->
+						cloudFile.name.toLowerCase().endsWith(".qcow2") ||
+						cloudFile.name.toLowerCase().endsWith(".img") ||
+						cloudFile.name.toLowerCase().endsWith(".raw")
+					}
+					
+					if (hasUploadableImage) {
+						log.info("No shared storage available, but template '${virtualImage.name}' has uploadable image file. Will upload/create template on target node '${opts.config.proxmoxNode}'.")
+					} else {
+						// Cannot clone across nodes and cannot upload - this will fail
+						def templateDSList = proxmoxTemplate.datastores?.join(", ") ?: "unknown"
+						def targetNodeDSList = proxmoxNode.datastores?.join(", ") ?: "none"
+						log.error("Error provisioning: Template '${virtualImage.name}' is on node '${proxmoxTemplate.node}' with datastores [$templateDSList] not shared with target node '${opts.config.proxmoxNode}', and no uploadable image file is available.")
+						def errorMsg = "Cross-node clone not possible: Template '${virtualImage.name}' uses storage [$templateDSList] on node '${proxmoxTemplate.node}'. " +
+									   "Target node '${opts.config.proxmoxNode}' has datastores [$targetNodeDSList]. " +
+									   "No shared storage available and no image file found in Morpheus for upload. " +
+									   "Please upload the image file to Morpheus or configure shared storage (e.g., Ceph, NFS) between the nodes."
+						rtn.addError("imageId", errorMsg)
+					}
 				} else {
 					log.info("Template '${virtualImage.name}' is on node '${proxmoxTemplate.node}', but can be cloned to '${opts.config.proxmoxNode}' using shared storage.")
 				}
