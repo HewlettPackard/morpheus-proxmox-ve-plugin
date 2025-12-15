@@ -776,7 +776,7 @@ class ProxmoxApiComputeUtil {
         def qemuVMs = callListApiV2(client, "cluster/resources", authConfig)
         qemuVMs.data.each { Map vm ->
             if (vm?.template == 1 && vm?.type == "qemu") {
-                vm.ip = "0.0.0.0"
+                vm.ip = ""
                 def vmConfigInfo = callListApiV2(client, "nodes/$vm.node/qemu/$vm.vmid/config", authConfig)
                 vm.maxCores = (vmConfigInfo?.data?.sockets?.toInteger() ?: 0) * (vmConfigInfo?.data?.cores?.toInteger() ?: 0)
                 vm.coresPerSocket = vmConfigInfo?.data?.cores?.toInteger() ?: 0
@@ -803,7 +803,7 @@ class ProxmoxApiComputeUtil {
         qemuVMs.data.each { Map vm ->
             if (vm?.template == 0 && vm?.type == "qemu") {
                 def vmAgentInfo = callListApiV2(client, "nodes/$vm.node/qemu/$vm.vmid/agent/network-get-interfaces", authConfig)
-                vm.ip = "0.0.0.0"
+                vm.ip = ""
                 if (vmAgentInfo.success && vmAgentInfo.data?.result) {
                     def interfaces = vmAgentInfo.data.result
                     // Iterate through each network interface
@@ -813,7 +813,7 @@ class ProxmoxApiComputeUtil {
                             iface.'ip-addresses'.each { ipAddr ->
                                 def ipAddress = ipAddr.'ip-address'
                                 def ipType = ipAddr.'ip-address-type'
-                                if (ipType == "ipv4" && ipAddress != "127.0.0.1" && vm.ip == "0.0.0.0") {
+                                if (ipType == "ipv4" && ipAddress != "127.0.0.1" && vm.ip == "") {
                                     log.debug("Setting IP address for VM ${vm.vmid}: ${ipAddress}")
                                     vm.ip = ipAddress
                                 }
@@ -923,7 +923,7 @@ class ProxmoxApiComputeUtil {
                 // Check if network info was retrieved successfully
                 if (!nodeNetworkInfo.success || !nodeNetworkInfo.data) {
                     log.warn("Failed to retrieve network info for node ${hvHost.node}, setting default IP")
-                    hvHost.ipAddress = "0.0.0.0"  // Set default IP for offline nodes
+                    hvHost.ipAddress = ""  // Set default IP as empty for offline nodes
                 } else {
                     def sortedNetworks = nodeNetworkInfo.data.sort { a, b ->
                         def aIface = a?.iface
@@ -994,7 +994,7 @@ class ProxmoxApiComputeUtil {
             } catch (Exception e) {
                 log.error("Error processing node ${hvHost.node}: ${e.message}", e)
                 // Set default values for failed nodes
-                hvHost.ipAddress = "0.0.0.0"
+                hvHost.ipAddress = ""
                 hvHost.networks = []
                 hvHost.datastores = []
             }
