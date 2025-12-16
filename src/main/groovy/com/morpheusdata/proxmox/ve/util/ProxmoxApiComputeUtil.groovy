@@ -3,6 +3,7 @@ package com.morpheusdata.proxmox.ve.util
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.model.ComputeServer
 import com.morpheusdata.model.ComputeServerInterface
+import com.morpheusdata.model.NetworkSubnet
 import com.morpheusdata.model.StorageVolume
 import com.morpheusdata.response.ServiceResponse
 import groovy.util.logging.Slf4j
@@ -733,8 +734,38 @@ class ProxmoxApiComputeUtil {
         try {
             ServiceResponse sdnNetworks = callListApiV2(client, "cluster/sdn/vnets", authConfig)
             if (sdnNetworks.success && sdnNetworks.data) {
+                log.debug("Found SDN Networks: ${sdnNetworks.data}")
                 sdnNetworks.data.each { Map sdn ->
-                    sdn.networkAddress = ''
+                    ServiceResponse sdnSubnets = callListApiV2(client, "cluster/sdn/vnets/${sdn.vnet}/subnets",
+                            authConfig)
+                    List<NetworkSubnet> subnets = []
+                    if (sdnSubnets.success && sdnSubnets.data) {
+                        log.debug("Found SDN Subnets for ${sdn.vnet}: ${sdnSubnets.data}")
+                        sdnSubnets.data.each { Map subnet ->
+                            log.debug("Saving values: name as ${subnet.subnet}, cidr as ${subnet.cidr}," +
+                                    " gateway as ${subnet.gateway}")
+                            NetworkSubnet subnetData = new NetworkSubnet(
+                                name: subnet.subnet,
+                                cidr: subnet.cidr,
+                                netmask: subnet.mask,
+                                subnetAddress: subnet.network,
+                                gateway: subnet.gateway
+                            )
+                            subnets << subnetData
+                        }
+                    }
+                    if (subnets.size() > 0) {
+                        sdn.networkAddress = subnets[0].cidr
+                        sdn.gateway = subnets[0].gateway
+                        sdn.netmask = subnets[0].netmask
+                        sdn.subnetAddress = subnets[0].subnetAddress
+                    } else {
+                        sdn.networkAddress = ""
+                        sdn.gateway = ""
+                        sdn.netmask = ""
+                        sdn.subnetAddress = ""
+                    }
+                    sdn.subnets = subnets
                     sdn.iface = sdn.vnet
                     sdn.host = "all"
                     networks << sdn
