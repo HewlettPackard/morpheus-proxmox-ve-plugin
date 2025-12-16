@@ -352,7 +352,6 @@ class ProxmoxApiComputeUtil {
                     log.info("Same-node clone: using storage '$requestedStorage'")
                 } else {
                     // Cross-node clone - only specify storage if it's shared storage
-                    // Otherwise, omit storage parameter and let Proxmox handle it
                     def sourceNodeStorages = getNodeStorages(client, authConfig, templateNode)
                     def targetNodeStorages = getNodeStorages(client, authConfig, nodeId)
                     
@@ -363,8 +362,9 @@ class ProxmoxApiComputeUtil {
                         requestBody.storage = requestedStorage
                         log.info("Cross-node clone: using shared storage '$requestedStorage'")
                     } else {
-                        log.warn("Cross-node clone: storage '$requestedStorage' not available on source node '$templateNode', using target node's local storage")
-                        // Don't specify storage - Proxmox will use local storage on target node
+                        // Non-shared storage detected - omit storage parameter
+                        // Proxmox will use default storage on target node
+                        log.warn("Cross-node clone: storage '$requestedStorage' not shared between nodes, omitting storage parameter")
                     }
                 }
             }
@@ -384,9 +384,9 @@ class ProxmoxApiComputeUtil {
             ]
 
             log.debug("Cloning template $templateId to VM $name($nextId) on node $nodeId")
-            log.info("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId")
-            log.info("Clone API endpoint: ${authConfig.apiUrl}${authConfig.v2basePath}/nodes/$templateNode/qemu/$templateId/clone")
-            log.info("Clone request body: $opts.body")
+            log.debug("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId")
+            log.debug("Clone API endpoint: ${authConfig.apiUrl}${authConfig.v2basePath}/nodes/$templateNode/qemu/$templateId/clone")
+            log.debug("Clone request body: $opts.body")
             
             // Clone from the node where template actually resides
             def results = client.callJsonApi(
@@ -397,9 +397,9 @@ class ProxmoxApiComputeUtil {
                     'POST'
             )
 
-            log.info("Clone API response - success: ${results?.success}, hasErrors: ${results?.hasErrors()}, errorCode: ${results?.errorCode}")
-            log.info("Clone API response content: ${results?.content}")
-            log.info("Clone API response data: ${results?.data}")
+            log.debug("Clone API response - success: ${results?.success}, hasErrors: ${results?.hasErrors()}, errorCode: ${results?.errorCode}")
+            log.debug("Clone API response content: ${results?.content}")
+            log.debug("Clone API response data: ${results?.data}")
 
             if(!results?.success || results?.hasErrors()) {
                 def errorMsg = "Clone API call failed - success: ${results?.success}, hasErrors: ${results?.hasErrors()}, content: ${results?.content}"
@@ -410,7 +410,7 @@ class ProxmoxApiComputeUtil {
             def resultData = null
             try {
                 resultData = new JsonSlurper().parseText(results.content)
-                log.info("Parsed clone response data: $resultData")
+                log.debug("Parsed clone response data: $resultData")
             } catch (e) {
                 log.error("Failed to parse clone response JSON: ${e.message}")
                 log.error("Raw content was: ${results.content}")
@@ -929,14 +929,14 @@ class ProxmoxApiComputeUtil {
                 if (status == "stopped") {
                     def exitstatus = resultData?.data?.exitstatus
                     if (exitstatus == "OK") {
-                        log.info("Task $taskUPID completed successfully")
+                        log.debug("Task $taskUPID completed successfully")
                         return new ServiceResponse(success: true, data: resultData)
                     } else {
                         log.error("Task $taskUPID failed with exit status: $exitstatus")
                         return new ServiceResponse(success: false, msg: "Task failed with status: $exitstatus", data: resultData)
                     }
                 } else {
-                    log.info("Task still running (status: $status), waiting ${API_CHECK_WAIT_INTERVAL}ms...")
+                    log.debug("Task still running (status: $status), waiting ${API_CHECK_WAIT_INTERVAL}ms...")
                 }
                 
                 sleep(API_CHECK_WAIT_INTERVAL)
