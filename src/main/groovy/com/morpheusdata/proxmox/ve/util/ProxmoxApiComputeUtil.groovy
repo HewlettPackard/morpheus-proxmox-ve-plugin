@@ -2,6 +2,7 @@ package com.morpheusdata.proxmox.ve.util
 
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.model.ComputeServer
+import com.morpheusdata.model.NetworkSubnet
 import com.morpheusdata.model.ComputeServerInterface
 import com.morpheusdata.model.StorageVolume
 import com.morpheusdata.response.ServiceResponse
@@ -383,10 +384,7 @@ class ProxmoxApiComputeUtil {
                     ignoreSSL: true
             ]
 
-            log.debug("Cloning template $templateId to VM $name($nextId) on node $nodeId")
-            log.debug("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId")
-            log.debug("Clone API endpoint: ${authConfig.apiUrl}${authConfig.v2basePath}/nodes/$templateNode/qemu/$templateId/clone")
-            log.debug("Clone request body: $opts.body")
+            log.info("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId")
             
             // Clone from the node where template actually resides
             def results = client.callJsonApi(
@@ -397,31 +395,36 @@ class ProxmoxApiComputeUtil {
                     'POST'
             )
 
-            log.debug("Clone API response - success: ${results?.success}, hasErrors: ${results?.hasErrors()}, errorCode: ${results?.errorCode}")
-            log.debug("Clone API response content: ${results?.content}")
-            log.debug("Clone API response data: ${results?.data}")
-
             if(!results?.success || results?.hasErrors()) {
-                def errorMsg = "Clone API call failed - success: ${results?.success}, hasErrors: ${results?.hasErrors()}, content: ${results?.content}"
-                log.error(errorMsg)
+                def errorMsg = "Clone operation failed"
+                try {
+                    def errorData = new JsonSlurper().parseText(results.content)
+                    if (errorData?.message) {
+                        errorMsg = errorData.message.trim()
+                    } else if (errorData?.data?.message) {
+                        errorMsg = errorData.data.message.trim()
+                    } else if (results?.content) {
+                        errorMsg = results.content
+                    }
+                } catch (e) {
+                    log.warn("Failed to parse error response: ${e.message}")
+                    if (results?.content) {
+                        errorMsg = results.content
+                    }
+                }
                 return ServiceResponse.error(errorMsg)
             }
 
             def resultData = null
             try {
                 resultData = new JsonSlurper().parseText(results.content)
-                log.debug("Parsed clone response data: $resultData")
             } catch (e) {
-                log.error("Failed to parse clone response JSON: ${e.message}")
-                log.error("Raw content was: ${results.content}")
-                return ServiceResponse.error("Failed to parse clone API response: ${e.message}")
+                log.error("Failed to parse clone response: ${e.message}")
+                return ServiceResponse.error("Failed to parse clone API response")
             }
             
-            // Check if Proxmox returned an error in the response data
             if (resultData?.errors) {
-                def errorMsg = "Proxmox clone failed: ${resultData}"
-                log.error(errorMsg)
-                return ServiceResponse.error(errorMsg)
+                return ServiceResponse.error("Clone failed: ${resultData.errors}")
             }
 
             rtn.success = true
@@ -430,7 +433,7 @@ class ProxmoxApiComputeUtil {
             // Proxmox returns a task UPID that we should monitor
             def taskUPID = resultData?.data
             if (taskUPID) {
-                log.info("Clone task started with UPID: $taskUPID on node $templateNode")
+                log.debug("Clone task started with UPID: $taskUPID on node $templateNode")
                 // Wait for the Proxmox task to complete on the source node
                 ServiceResponse taskWaitResult = waitForTaskComplete(new HttpApiClient(), authConfig, templateNode, taskUPID, 3600L)
                 
@@ -438,7 +441,7 @@ class ProxmoxApiComputeUtil {
                     log.error("Clone task failed for VM $nextId: ${taskWaitResult.msg}")
                     return ServiceResponse.error("Error Provisioning VM. Clone task error: ${taskWaitResult.msg}")
                 }
-                log.info("Clone task completed successfully for VM $nextId")
+                log.debug("Clone task completed successfully for VM $nextId")
             } else {
                 log.warn("No task UPID returned from clone API, falling back to VM config check")
                 // Fallback to old method
@@ -929,7 +932,7 @@ class ProxmoxApiComputeUtil {
                 if (status == "stopped") {
                     def exitstatus = resultData?.data?.exitstatus
                     if (exitstatus == "OK") {
-                        log.debug("Task $taskUPID completed successfully")
+                        log.info("Task $taskUPID completed successfully")
                         return new ServiceResponse(success: true, data: resultData)
                     } else {
                         log.error("Task $taskUPID failed with exit status: $exitstatus")
@@ -1046,8 +1049,38 @@ class ProxmoxApiComputeUtil {
         try {
             ServiceResponse sdnNetworks = callListApiV2(client, "cluster/sdn/vnets", authConfig)
             if (sdnNetworks.success && sdnNetworks.data) {
+                log.debug("Found SDN Networks: ${sdnNetworks.data}")
                 sdnNetworks.data.each { Map sdn ->
-                    sdn.networkAddress = ''
+                    ServiceResponse sdnSubnets = callListApiV2(client, "cluster/sdn/vnets/${sdn.vnet}/subnets",
+                            authConfig)
+                    List<NetworkSubnet> subnets = []
+                    if (sdnSubnets.success && sdnSubnets.data) {
+                        log.debug("Found SDN Subnets for ${sdn.vnet}: ${sdnSubnets.data}")
+                        sdnSubnets.data.each { Map subnet ->
+                            log.debug("Saving values: name as ${subnet.subnet}, cidr as ${subnet.cidr}," +
+                                    " gateway as ${subnet.gateway}")
+                            NetworkSubnet subnetData = new NetworkSubnet(
+                                name: subnet.subnet,
+                                cidr: subnet.cidr,
+                                netmask: subnet.mask,
+                                subnetAddress: subnet.network,
+                                gateway: subnet.gateway
+                            )
+                            subnets << subnetData
+                        }
+                    }
+                    if (subnets.size() > 0) {
+                        sdn.networkAddress = subnets[0].cidr
+                        sdn.gateway = subnets[0].gateway
+                        sdn.netmask = subnets[0].netmask
+                        sdn.subnetAddress = subnets[0].subnetAddress
+                    } else {
+                        sdn.networkAddress = ""
+                        sdn.gateway = ""
+                        sdn.netmask = ""
+                        sdn.subnetAddress = ""
+                    }
+                    sdn.subnets = subnets
                     sdn.iface = sdn.vnet
                     sdn.host = "all"
                     networks << sdn
@@ -1089,7 +1122,7 @@ class ProxmoxApiComputeUtil {
         def qemuVMs = callListApiV2(client, "cluster/resources", authConfig)
         qemuVMs.data.each { Map vm ->
             if (vm?.template == 1 && vm?.type == "qemu") {
-                vm.ip = "0.0.0.0"
+                vm.ip = ""
                 def vmConfigInfo = callListApiV2(client, "nodes/$vm.node/qemu/$vm.vmid/config", authConfig)
                 vm.maxCores = (vmConfigInfo?.data?.sockets?.toInteger() ?: 0) * (vmConfigInfo?.data?.cores?.toInteger() ?: 0)
                 vm.coresPerSocket = vmConfigInfo?.data?.cores?.toInteger() ?: 0
@@ -1116,7 +1149,7 @@ class ProxmoxApiComputeUtil {
         qemuVMs.data.each { Map vm ->
             if (vm?.template == 0 && vm?.type == "qemu") {
                 def vmAgentInfo = callListApiV2(client, "nodes/$vm.node/qemu/$vm.vmid/agent/network-get-interfaces", authConfig)
-                vm.ip = "0.0.0.0"
+                vm.ip = ""
                 if (vmAgentInfo.success && vmAgentInfo.data?.result) {
                     def interfaces = vmAgentInfo.data.result
                     // Iterate through each network interface
@@ -1126,7 +1159,7 @@ class ProxmoxApiComputeUtil {
                             iface.'ip-addresses'.each { ipAddr ->
                                 def ipAddress = ipAddr.'ip-address'
                                 def ipType = ipAddr.'ip-address-type'
-                                if (ipType == "ipv4" && ipAddress != "127.0.0.1" && vm.ip == "0.0.0.0") {
+                                if (ipType == "ipv4" && ipAddress != "127.0.0.1" && vm.ip == "") {
                                     log.debug("Setting IP address for VM ${vm.vmid}: ${ipAddress}")
                                     vm.ip = ipAddress
                                 }
@@ -1236,7 +1269,7 @@ class ProxmoxApiComputeUtil {
                 // Check if network info was retrieved successfully
                 if (!nodeNetworkInfo.success || !nodeNetworkInfo.data) {
                     log.warn("Failed to retrieve network info for node ${hvHost.node}, setting default IP")
-                    hvHost.ipAddress = "0.0.0.0"  // Set default IP for offline nodes
+                    hvHost.ipAddress = ""  // Set default IP as empty for offline nodes
                 } else {
                     def sortedNetworks = nodeNetworkInfo.data.sort { a, b ->
                         def aIface = a?.iface
@@ -1307,7 +1340,7 @@ class ProxmoxApiComputeUtil {
             } catch (Exception e) {
                 log.error("Error processing node ${hvHost.node}: ${e.message}", e)
                 // Set default values for failed nodes
-                hvHost.ipAddress = "0.0.0.0"
+                hvHost.ipAddress = ""
                 hvHost.networks = []
                 hvHost.datastores = []
             }
