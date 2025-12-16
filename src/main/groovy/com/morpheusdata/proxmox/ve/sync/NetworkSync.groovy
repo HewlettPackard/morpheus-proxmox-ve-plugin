@@ -1,6 +1,7 @@
 package com.morpheusdata.proxmox.ve.sync
 
 import com.morpheusdata.model.ComputeServer
+import com.morpheusdata.model.NetworkSubnet
 import com.morpheusdata.proxmox.ve.ProxmoxVePlugin
 import com.morpheusdata.proxmox.ve.util.ProxmoxApiComputeUtil
 import com.morpheusdata.core.MorpheusContext
@@ -89,12 +90,12 @@ class NetworkSync {
                 def networkType = networkTypes[cloudItem.type]
                 networks << new Network(
                         externalId   : cloudItem.iface,
+                        uniqueId     : cloudItem.iface,
                         name         : cloudItem.iface,
                         cloud        : cloud,
                         displayName  : cloudItem?.name ?: cloudItem.iface,
                         description  : cloudItem?.networkAddress,
                         cidr         : cloudItem?.networkAddress,
-                        status       : cloudItem?.active || 1,
                         code         : "proxmox.network.${cloudItem.iface}",
                         typeCode     : networkType.code,
                         type         : networkType,
@@ -105,9 +106,12 @@ class NetworkSync {
                         networkServer: cloud.networkServer,
                         providerId   : "",
                         gateway      : cloudItem?.gateway,
-                        dnsPrimary   : cloudItem?.gateway,
-                        dnsSecondary : "8.8.8.8",
+                        netmask      : cloudItem?.netmask,
+                        subnetAddress: cloudItem?.subnetAddress,
+                        dnsPrimary   : "",
+                        dnsSecondary : "",
                         dhcpServer   : true,
+                        active       : true
                 )
             }
             log.debug("Saving ${networks.size()} networks")
@@ -122,16 +126,23 @@ class NetworkSync {
 
 
     private updateMatchedNetworks(List<SyncTask.UpdateItem<Network, Map>> updateItems) {
-
         List itemsToUpdate = []
         for (def updateItem in updateItems) {
             def existingItem = updateItem.existingItem
             def cloudItem = updateItem.masterItem
-
             Map networkFieldValueMap = [
-                    name: cloudItem?.name ?: cloudItem.iface,
-                    cidr: cloudItem.networkAddress,
-                    description: cloudItem.networkAddress
+                    name         : cloudItem.iface,
+                    cloud        : cloud,
+                    displayName  : cloudItem?.name ?: cloudItem.iface,
+                    description  : cloudItem?.networkAddress,
+                    cidr         : cloudItem?.networkAddress,
+                    gateway      : cloudItem?.gateway,
+                    netmask      : cloudItem?.netmask,
+                    subnetAddress: cloudItem?.subnetAddress,
+                    dnsPrimary   : "",
+                    dnsSecondary : "",
+                    dhcpServer   : true,
+                    active       : true
             ]
 
             if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, networkFieldValueMap)) {
