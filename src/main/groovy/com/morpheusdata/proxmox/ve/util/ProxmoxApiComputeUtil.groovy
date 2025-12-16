@@ -2,6 +2,7 @@ package com.morpheusdata.proxmox.ve.util
 
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.model.ComputeServer
+import com.morpheusdata.model.NetworkSubnet
 import com.morpheusdata.model.ComputeServerInterface
 import com.morpheusdata.model.NetworkSubnet
 import com.morpheusdata.model.StorageVolume
@@ -309,9 +310,7 @@ class ProxmoxApiComputeUtil {
 
 
     static cloneTemplate(HttpApiClient client, Map authConfig, String templateId, String name, String nodeId, ComputeServer server) {
-        //Long vcpus, Long ram, List<StorageVolume> volumes, List<String> targetNetworks) {
         log.debug("cloneTemplate: $templateId")
-
         Long vcpus = server.maxCores
         Long ram = server.maxMemory
         List<StorageVolume> volumes = server.volumes
@@ -320,63 +319,150 @@ class ProxmoxApiComputeUtil {
         def nextId = callListApiV2(client, "cluster/nextid", authConfig).data
         log.debug("Next VM Id is: $nextId")
         StorageVolume rootVolume = volumes.find { it.rootVolume }
+        
+        // Find the actual node where the template resides (multi-node cluster support)
+        String templateNode = findNodeForVM(client, authConfig, templateId)
+        if (!templateNode) {
+            log.error("Cannot find template $templateId on any node in the cluster")
+            return ServiceResponse.error("Template $templateId not found on any node in the cluster")
+        }
+        
+        if (templateNode != nodeId) {
+            log.info("Template $templateId is on node $templateNode, but cloning to node $nodeId (cross-node clone)")
+        }
+        
         try {
             def tokenCfg = getApiV2Token(authConfig).data
             rtn.data = []
+            
+            // Build request body
+            def requestBody = [
+                    newid: nextId,
+                    target: nodeId,  // Target node for the new VM
+                    vmid: templateId,
+                    name: name,
+                    full: true
+            ]
+            
+            // For cross-node clones, check if storage exists on source node
+            // If storage is specified and this is a cross-node clone, we need to be careful
+            String requestedStorage = rootVolume?.datastore?.externalId
+            if (requestedStorage) {
+                if (templateNode == nodeId) {
+                    // Same node clone - use specified storage
+                    requestBody.storage = requestedStorage
+                    log.info("Same-node clone: using storage '$requestedStorage'")
+                } else {
+                    // Cross-node clone - only specify storage if it's shared storage
+                    def sourceNodeStorages = getNodeStorages(client, authConfig, templateNode)
+                    def targetNodeStorages = getNodeStorages(client, authConfig, nodeId)
+                    
+                    boolean isSharedStorage = sourceNodeStorages?.contains(requestedStorage) && 
+                                            targetNodeStorages?.contains(requestedStorage)
+                    
+                    if (isSharedStorage) {
+                        requestBody.storage = requestedStorage
+                        log.info("Cross-node clone: using shared storage '$requestedStorage'")
+                    } else {
+                        // Non-shared storage detected - omit storage parameter
+                        // Proxmox will use default storage on target node
+                        log.warn("Cross-node clone: storage '$requestedStorage' not shared between nodes, omitting storage parameter")
+                    }
+                }
+            }
+            
+            log.debug("Selected Resource Pool Name: ${server?.resourcePool?.name}")
+            if (server?.resourcePool?.name) requestBody.pool = server.resourcePool.name
+            
             def opts = [
                     headers: [
                             'Content-Type': 'application/json',
                             'Cookie': "PVEAuthCookie=$tokenCfg.token",
                             'CSRFPreventionToken': tokenCfg.csrfToken
                     ],
-                    body: [
-                            newid: nextId,
-                            node: nodeId,
-                            vmid: templateId,
-                            name: name,
-                            full: true,
-                            storage: "${rootVolume.datastore.externalId}"
-                    ],
+                    body: requestBody,
                     contentType: ContentType.APPLICATION_JSON,
                     ignoreSSL: true
             ]
 
-            log.debug("Selected Resource Pool Name: ${server?.resourcePool?.name}")
-            if (server?.resourcePool?.name) opts.body.pool = server.resourcePool.name
-
-            log.debug("Cloning template $templateId to VM $name($nextId) on node $nodeId")
+            log.info("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId")
+            
+            // Clone from the node where template actually resides
             def results = client.callJsonApi(
                     (String) authConfig.apiUrl,
-                    "${authConfig.v2basePath}/nodes/$nodeId/qemu/$templateId/clone",
+                    "${authConfig.v2basePath}/nodes/$templateNode/qemu/$templateId/clone",
                     null, null,
                     new HttpApiClient.RequestOptions(opts),
                     'POST'
             )
 
-            def resultData = new JsonSlurper().parseText(results.content)
-
-            if(results?.success && !results?.hasErrors()) {
-                rtn.success = true
-                rtn.data = resultData
-
-                ServiceResponse cloneWaitResult = waitForCloneToComplete(new HttpApiClient(), authConfig, templateId, nextId, nodeId, 3600L)
-
-                if (!cloneWaitResult?.success) {
-                    return ServiceResponse.error("Error Provisioning VM. Wait for clone error: ${cloneWaitResult}")
+            if(!results?.success || results?.hasErrors()) {
+                def errorMsg = "Clone operation failed"
+                try {
+                    def errorData = new JsonSlurper().parseText(results.content)
+                    if (errorData?.message) {
+                        errorMsg = errorData.message.trim()
+                    } else if (errorData?.data?.message) {
+                        errorMsg = errorData.data.message.trim()
+                    } else if (results?.content) {
+                        errorMsg = results.content
+                    }
+                } catch (e) {
+                    log.warn("Failed to parse error response: ${e.message}")
+                    if (results?.content) {
+                        errorMsg = results.content
+                    }
                 }
-
-                log.debug("Resizing newly cloned VM. Spec: CPU: $vcpus,\n RAM: $ram,\n Volumes: $volumes,\n NICs: $nics")
-                ServiceResponse rtnResize = resizeVM(new HttpApiClient(), authConfig, nodeId, nextId, vcpus, ram, volumes, nics)
-
-                if (!rtnResize?.success) {
-                    return ServiceResponse.error("Error Sizing VM Compute. Resize compute error: ${rtnResize}")
-                }
-
-                rtn.data.vmId = nextId
-            } else {
-                rtn.msg = "Provisioning failed: ${results.toMap()}"
-                rtn.success = false
+                return ServiceResponse.error(errorMsg)
             }
+
+            def resultData = null
+            try {
+                resultData = new JsonSlurper().parseText(results.content)
+            } catch (e) {
+                log.error("Failed to parse clone response: ${e.message}")
+                return ServiceResponse.error("Failed to parse clone API response")
+            }
+            
+            if (resultData?.errors) {
+                return ServiceResponse.error("Clone failed: ${resultData.errors}")
+            }
+
+            rtn.success = true
+            rtn.data = [vmId: nextId, apiResult: resultData]
+
+            // Proxmox returns a task UPID that we should monitor
+            def taskUPID = resultData?.data
+            if (taskUPID) {
+                log.debug("Clone task started with UPID: $taskUPID on node $templateNode")
+                // Wait for the Proxmox task to complete on the source node
+                ServiceResponse taskWaitResult = waitForTaskComplete(new HttpApiClient(), authConfig, templateNode, taskUPID, 3600L)
+                
+                if (!taskWaitResult?.success) {
+                    log.error("Clone task failed for VM $nextId: ${taskWaitResult.msg}")
+                    return ServiceResponse.error("Error Provisioning VM. Clone task error: ${taskWaitResult.msg}")
+                }
+                log.debug("Clone task completed successfully for VM $nextId")
+            } else {
+                log.warn("No task UPID returned from clone API, falling back to VM config check")
+                // Fallback to old method
+                ServiceResponse cloneWaitResult = waitForCloneToComplete(new HttpApiClient(), authConfig, templateId, nextId, nodeId, 3600L)
+                
+                if (!cloneWaitResult?.success) {
+                    log.error("Clone wait failed for VM $nextId: ${cloneWaitResult.msg}")
+                    return ServiceResponse.error("Error Provisioning VM. Wait for clone error: ${cloneWaitResult.msg}")
+                }
+            }
+
+            log.debug("Resizing newly cloned VM. Spec: CPU: $vcpus,\n RAM: $ram,\n Volumes: $volumes,\n NICs: $nics")
+            ServiceResponse rtnResize = resizeVM(new HttpApiClient(), authConfig, nodeId, nextId, vcpus, ram, volumes, nics)
+
+            if (!rtnResize?.success) {
+                log.error("Resize failed for VM $nextId: ${rtnResize.msg}")
+                return ServiceResponse.error("Error Sizing VM Compute. Resize compute error: ${rtnResize.msg}")
+            }
+
+            log.info("Successfully cloned and configured VM $nextId on node $nodeId")
         } catch(e) {
             log.error "Error Provisioning VM: ${e}", e
             return ServiceResponse.error("Error Provisioning VM: ${e}")
@@ -388,10 +474,27 @@ class ProxmoxApiComputeUtil {
 
 
     static List<Map> getExistingVMStorage(HttpApiClient client, Map authConfig, String nodeId, String vmId) {
-
-        def vmConfigInfo = callListApiV2(client, "nodes/$nodeId/qemu/$vmId/config", authConfig).data
+        // First try the provided node
+        def vmConfigInfo = callListApiV2(client, "nodes/$nodeId/qemu/$vmId/config", authConfig)
+        
+        // If VM/template not found on the provided node, search across cluster
+        if (!vmConfigInfo.success || vmConfigInfo.hasErrors()) {
+            log.warn("VM/template $vmId not found on node $nodeId, searching other nodes in cluster...")
+            String actualNode = findNodeForVM(client, authConfig, vmId)
+            if (actualNode && actualNode != nodeId) {
+                log.info("Found VM/template $vmId on node $actualNode instead of $nodeId")
+                vmConfigInfo = callListApiV2(client, "nodes/$actualNode/qemu/$vmId/config", authConfig)
+            }
+        }
+        
+        if (!vmConfigInfo.success || !vmConfigInfo.data) {
+            log.error("Failed to retrieve VM/template $vmId configuration from any node")
+            return []
+        }
+        
+        def vmConfigData = vmConfigInfo.data
         def validBootDisks = ["scsi0", "virtio0", "sata0", "ide0"]
-        def bootEntries = vmConfigInfo.boot?.trim()?.replaceAll("order=", "")?.split(/[;,\s]+/)
+        def bootEntries = vmConfigData.boot?.trim()?.replaceAll("order=", "")?.split(/[;,\s]+/)
         def bootDisk = ""
 
         def extractDiskKeys  = { config ->
@@ -403,7 +506,7 @@ class ProxmoxApiComputeUtil {
         }
         List vmStorageList = []
 
-        def vmDiskKeys = extractDiskKeys(vmConfigInfo)
+        def vmDiskKeys = extractDiskKeys(vmConfigData)
 
         //Boot disk specified in config boot order
         bootEntries.each { String diskLabel ->
@@ -425,14 +528,123 @@ class ProxmoxApiComputeUtil {
             throw new Exception("Boot disk for VM not found!")
         }
 
-        vmStorageList << [ label: "$bootDisk", config: vmConfigInfo[bootDisk], isRoot: true ]
+        vmStorageList << [ label: "$bootDisk", config: vmConfigData[bootDisk], isRoot: true ]
         vmDiskKeys.each { String diskLabel ->
             if (diskLabel != bootDisk) {
-                vmStorageList << [ label: "$diskLabel", config: vmConfigInfo[diskLabel], isRoot: false ]
+                vmStorageList << [ label: "$diskLabel", config: vmConfigData[diskLabel], isRoot: false ]
             }
         }
 
         return vmStorageList
+    }
+    /**
+     * Find which node a VM or template resides on in a multi-node cluster
+     * 
+     * Uses /cluster/resources?type=vm endpoint to fetch only QEMU VMs/templates,
+     * then filters client-side by vmid. Falls back to all resources if type parameter fails,
+     * and ultimately checks each node individually if cluster query fails.
+     * 
+     * Proxmox API limitation: There is NO endpoint like /api2/json/qemu/{vmid}
+     * All VM queries require: /api2/json/nodes/{node}/qemu/{vmid}
+     * 
+     * @param client HttpApiClient instance
+     * @param authConfig Authentication configuration
+     * @param vmId The VM or template ID to locate
+     * @return The node name where the VM/template resides, or null if not found
+     */
+    static String findNodeForVM(HttpApiClient client, Map authConfig, String vmId) {
+        try {
+            // Try with type=vm filter first for better performance
+            def qemuResources = callListApiV2(client, "cluster/resources?type=vm", authConfig)
+            
+            // If type parameter not supported, fall back to unfiltered query
+            if (!qemuResources?.success || qemuResources?.hasErrors()) {
+                log.debug("cluster/resources?type=vm not supported, trying without filter")
+                qemuResources = callListApiV2(client, "cluster/resources", authConfig)
+            }
+            
+            if (qemuResources?.success && qemuResources?.data) {
+                // Filter for the specific VM/template (client-side filtering)
+                def vmResource = qemuResources.data.find { 
+                    it.type == "qemu" && it.vmid?.toString() == vmId?.toString()
+                }
+                
+                if (vmResource?.node) {
+                    log.info("VM/template $vmId found on node: ${vmResource.node}")
+                    return vmResource.node
+                }
+            }
+            
+            // Fallback: Check each node individually
+            log.debug("VM/template $vmId not found in cluster resources, checking nodes individually")
+            List<String> nodes = getProxmoxHypervisorNodeIds(client, authConfig).data
+            
+            for (String node : nodes) {
+                try {
+                    def vmConfig = callListApiV2(client, "nodes/$node/qemu/$vmId/config", authConfig)
+                    if (vmConfig.success && vmConfig.data) {
+                        log.info("VM/template $vmId found on node $node via direct query")
+                        return node
+                    }
+                } catch (Exception nodeEx) {
+                    // VM not on this node, continue checking
+                    log.debug("VM/template $vmId not on node $node")
+                }
+            }
+            
+            log.warn("VM/template $vmId not found on any node in the cluster")
+            return null
+        } catch (e) {
+            log.error("Error finding node for VM $vmId: ${e}", e)
+            return null
+        }
+    }
+
+    /**
+     * Get list of storage names available on a specific node
+     */
+    static List<String> getNodeStorages(HttpApiClient client, Map authConfig, String nodeId) {
+        try {
+            def storageResponse = callListApiV2(client, "nodes/${nodeId}/storage", authConfig)
+            if (storageResponse?.data) {
+                def storageNames = storageResponse.data.collect { it.storage }
+                log.debug("Node $nodeId has storages: $storageNames")
+                return storageNames
+            }
+            return []
+        } catch (e) {
+            log.error("Error getting storages for node $nodeId: ${e}", e)
+            return []
+        }
+    }
+
+    /**
+     * Get the actual storage name used by a VM's root disk
+     * @param client HttpApiClient
+     * @param authConfig Authentication configuration
+     * @param nodeId Node where VM resides
+     * @param vmId VM ID
+     * @return Storage name (e.g., "local-lvm", "Ceph.HDD.01")
+     */
+    static String getVMActualStorage(HttpApiClient client, Map authConfig, String nodeId, String vmId) {
+        try {
+            def vmStorageList = getExistingVMStorage(client, authConfig, nodeId, vmId)
+            if (vmStorageList && vmStorageList.size() > 0) {
+                def rootDisk = vmStorageList.find { it.isRoot }
+                if (rootDisk?.config) {
+                    // Disk config format: "storage:vm-123-disk-0,size=10G" or "storage:123/vm-123-disk-0.qcow2"
+                    def diskConfig = rootDisk.config
+                    def storageName = diskConfig.split(':')[0]
+                    log.debug("VM $vmId on node $nodeId uses storage: $storageName")
+                    return storageName
+                }
+            }
+            log.warn("Could not determine actual storage for VM $vmId on node $nodeId")
+            return null
+        } catch (e) {
+            log.error("Error getting actual storage for VM $vmId: ${e}", e)
+            return null
+        }
     }
 
 
@@ -462,38 +674,69 @@ class ProxmoxApiComputeUtil {
     }
 
 
-    static actionVMStatus(HttpApiClient client, Map authConfig, String nodeId, String vmId, String action) {
+    static actionVMStatus(HttpApiClient client, Map authConfig, String nodeId, String vmId, String action, int maxRetries = 3) {
+        int retryCount = 0
+        Exception lastException = null
 
-        try {
-            def tokenCfg = getApiV2Token(authConfig).data
-            def opts = [
-                    headers  : [
-                            'Content-Type'       : 'application/json',
-                            'Cookie'             : "PVEAuthCookie=$tokenCfg.token",
-                            'CSRFPreventionToken': tokenCfg.csrfToken
-                    ],
-                    body     : [
-                            vmid: vmId,
-                            node: nodeId
-                    ],
-                    contentType: ContentType.APPLICATION_JSON,
-                    ignoreSSL: true
-            ]
+        while (retryCount < maxRetries) {
+            try {
+                def tokenCfg = getApiV2Token(authConfig).data
+                def opts = [
+                        headers  : [
+                                'Content-Type'       : 'application/json',
+                                'Cookie'             : "PVEAuthCookie=$tokenCfg.token",
+                                'CSRFPreventionToken': tokenCfg.csrfToken
+                        ],
+                        body     : [
+                                vmid: vmId,
+                                node: nodeId
+                        ],
+                        contentType: ContentType.APPLICATION_JSON,
+                        ignoreSSL: true
+                ]
 
-            log.debug("Post path is: $authConfig.apiUrl${authConfig.v2basePath}/nodes/$nodeId/qemu/$vmId/status/$action/")
-            def results = client.callJsonApi(
-                    (String) authConfig.apiUrl,
-                    "${authConfig.v2basePath}/nodes/$nodeId/qemu/$vmId/status/$action/",
-                    null, null,
-                    new HttpApiClient.RequestOptions(opts),
-                    'POST'
-            )
+                log.debug("Post path is: $authConfig.apiUrl${authConfig.v2basePath}/nodes/$nodeId/qemu/$vmId/status/$action/ (attempt ${retryCount + 1}/$maxRetries)")
+                def results = client.callJsonApi(
+                        (String) authConfig.apiUrl,
+                        "${authConfig.v2basePath}/nodes/$nodeId/qemu/$vmId/status/$action/",
+                        null, null,
+                        new HttpApiClient.RequestOptions(opts),
+                        'POST'
+                )
 
-            return results
-        } catch (e) {
-            log.error "Error performing $action on VM: ${e}", e
-            return ServiceResponse.error("Error performing $action on VM: ${e}")
+                if (results?.success) {
+                    log.debug("VM $action successful on attempt ${retryCount + 1}")
+                    return results
+                } else if (retryCount < maxRetries - 1) {
+                    log.warn("VM $action failed on attempt ${retryCount + 1}, retrying...")
+                    sleep(2000) // Wait 2 seconds before retry
+                    retryCount++
+                } else {
+                    return results
+                }
+            } catch (org.apache.http.NoHttpResponseException e) {
+                lastException = e
+                log.warn("NoHttpResponseException performing $action on VM $vmId (attempt ${retryCount + 1}/$maxRetries): ${e.message}")
+                if (retryCount < maxRetries - 1) {
+                    sleep(3000) // Wait 3 seconds before retry on connection error
+                    retryCount++
+                } else {
+                    log.error("Failed to perform $action on VM $vmId after $maxRetries attempts", e)
+                    return ServiceResponse.error("Error performing $action on VM after $maxRetries attempts: Connection to Proxmox failed")
+                }
+            } catch (Exception e) {
+                lastException = e
+                log.error("Error performing $action on VM $vmId (attempt ${retryCount + 1}/$maxRetries): ${e.message}", e)
+                if (retryCount < maxRetries - 1) {
+                    sleep(2000)
+                    retryCount++
+                } else {
+                    return ServiceResponse.error("Error performing $action on VM: ${e.message}")
+                }
+            }
         }
+
+        return ServiceResponse.error("Error performing $action on VM after $maxRetries attempts: ${lastException?.message}")
     }
 
 
@@ -635,6 +878,79 @@ class ProxmoxApiComputeUtil {
         } catch(e) {
             log.error "Error Checking VM Clone Status: ${e}", e
             return ServiceResponse.error("Error Checking VM Clone Status: ${e}")
+        }
+    }
+
+    /**
+     * Wait for a Proxmox task (identified by UPID) to complete
+     * @param client HttpApiClient
+     * @param authConfig Authentication configuration
+     * @param nodeId Node where the task is running
+     * @param taskUPID Task UPID from Proxmox API
+     * @param timeoutInSec Timeout in seconds
+     * @return ServiceResponse
+     */
+    static ServiceResponse waitForTaskComplete(HttpApiClient client, Map authConfig, String nodeId, String taskUPID, Long timeoutInSec) {
+        Long timeout = timeoutInSec * 1000
+        Long duration = 0
+        log.debug("waitForTaskComplete: $taskUPID on node $nodeId")
+
+        try {
+            def tokenCfg = getApiV2Token(authConfig).data
+            def opts = [
+                    headers: [
+                            'Content-Type': 'application/json',
+                            'Cookie': "PVEAuthCookie=$tokenCfg.token",
+                            'CSRFPreventionToken': tokenCfg.csrfToken
+                    ],
+                    contentType: ContentType.APPLICATION_JSON,
+                    ignoreSSL: true
+            ]
+
+            // Poll task status
+            while (duration < timeout) {
+                log.debug("Checking task $taskUPID status on node $nodeId")
+                def results = client.callJsonApi(
+                        (String) authConfig.apiUrl,
+                        "${authConfig.v2basePath}/nodes/$nodeId/tasks/$taskUPID/status",
+                        null, null,
+                        new HttpApiClient.RequestOptions(opts),
+                        'GET'
+                )
+
+                if (!results.success) {
+                    log.error("Error checking task status: ${results.errorCode}")
+                    sleep(API_CHECK_WAIT_INTERVAL)
+                    duration += API_CHECK_WAIT_INTERVAL
+                    continue
+                }
+
+                def resultData = new JsonSlurper().parseText(results.content)
+                def status = resultData?.data?.status
+                
+                log.debug("Task status: $status")
+                
+                if (status == "stopped") {
+                    def exitstatus = resultData?.data?.exitstatus
+                    if (exitstatus == "OK") {
+                        log.info("Task $taskUPID completed successfully")
+                        return new ServiceResponse(success: true, data: resultData)
+                    } else {
+                        log.error("Task $taskUPID failed with exit status: $exitstatus")
+                        return new ServiceResponse(success: false, msg: "Task failed with status: $exitstatus", data: resultData)
+                    }
+                } else {
+                    log.debug("Task still running (status: $status), waiting ${API_CHECK_WAIT_INTERVAL}ms...")
+                }
+                
+                sleep(API_CHECK_WAIT_INTERVAL)
+                duration += API_CHECK_WAIT_INTERVAL
+            }
+            
+            return new ServiceResponse(success: false, msg: "Task timeout after ${timeoutInSec}s")
+        } catch(e) {
+            log.error "Error checking task status: ${e}", e
+            return ServiceResponse.error("Error checking task status: ${e}")
         }
     }
 
@@ -1042,6 +1358,14 @@ class ProxmoxApiComputeUtil {
         def rtn = new ServiceResponse(success: false)
         try {
             rtn.data = []
+            
+            // Separate path and query string for proper HTTP client handling
+            def pathParts = path.split('\\?', 2)
+            def actualPath = "${authConfig.v2basePath}/${pathParts[0]}"
+            def queryString = pathParts.length > 1 ? pathParts[1] : null
+            
+            log.debug("callListApiV2: actualPath=${actualPath}, queryString=${queryString}")
+            
             def opts = new HttpApiClient.RequestOptions(
                     headers: [
                         'Content-Type': 'application/json',
@@ -1051,7 +1375,12 @@ class ProxmoxApiComputeUtil {
                     contentType: ContentType.APPLICATION_JSON,
                     ignoreSSL: true
             )
-            def results = client.callJsonApi(authConfig.apiUrl, "${authConfig.v2basePath}/${path}", null, null, opts, 'GET')
+            
+            // Use 6-parameter version if we have a query string, otherwise use 4-parameter version
+            def results = queryString ? 
+                client.callJsonApi(authConfig.apiUrl, actualPath, queryString, null, opts, 'GET') :
+                client.callJsonApi(authConfig.apiUrl, actualPath, null, null, opts, 'GET')
+            
             def resultData = results.toMap().data.data
             log.debug("callListApiV2 results: ${resultData}")
             if(results?.success && !results?.hasErrors()) {
