@@ -100,7 +100,9 @@ class ProxmoxSshUtil {
     private static runSshCmd(MorpheusContext context, ComputeServer hvNode, String cmd) {
         TaskResult result = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, cmd, "", "", "", false, LogLevel.info, true, null, false).blockingGet()
         if (!result.success) {
-            throw new Exception(result.toMap())
+            def errorMsg = "SSH command failed on ${hvNode.sshHost}: ${cmd}\nExit Code: ${result.exitCode}\nOutput: ${result.output}\nError: ${result.error}"
+            log.error(errorMsg)
+            throw new Exception(errorMsg)
         }
     }
 
