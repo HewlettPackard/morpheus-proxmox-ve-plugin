@@ -326,7 +326,6 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
             return rtn
         }
 
-        HttpApiClient client = new HttpApiClient()
 		Cloud cloud = context.async.cloud.get(opts.zoneId?.toLong()).blockingGet()
 		ComputeServer selectedNode = getHypervisorHostByExternalId(cloud.id, opts.config.proxmoxNode)
 
@@ -334,141 +333,6 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			rtn.success = false
 			rtn.addError("proxmoxNode", VALIDATION_MSG_INACTIVE_NODE)
 			return rtn
-		}
-
-		Map authConfig = plugin.getAuthConfig(cloud)
-
-		List<Map> wizardInterfaces = opts.networkInterfaces
-		List<Map> instanceDisks = opts.volumes
-		Long imageId = opts.config.imageId as Long
-		
-		log.info("Validation - User selected target node: ${opts.config.proxmoxNode}")
-		Map proxmoxNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, opts.config.proxmoxNode).data
-		log.info("Validation - Fetched node data for: ${proxmoxNode?.node}, datastores: ${proxmoxNode?.datastores}")
-
-		//get proxmox datastores from API using morpheus datastore IDs from wizard
-		List<String> wizardDatastoreExternalIds = []
-		opts.volumes.each {
-			if (it.datastoreId != "auto") {
-				wizardDatastoreExternalIds << context.async.cloud.datastore.listById([it.datastoreId as Long]).blockingFirst().externalId
-			}
-		}
-		List<Map> wizardDatastores = ProxmoxApiComputeUtil.getProxmoxDatastoresById(client, authConfig, wizardDatastoreExternalIds).data
-		log.info("Validation - User selected datastores: ${wizardDatastores?.collect { it.storage }}")
-
-		//get virtualImage Datastores
-		def virtualImage = context.async.virtualImage.listById([imageId]).blockingFirst()
-		def virtualImageExternalId = virtualImage.externalId as Long
-		def proxmoxTemplate = ProxmoxApiComputeUtil.getTemplateById(client, authConfig, virtualImageExternalId).data
-		log.info("Validation - Template '${virtualImage.name}' (ID: ${virtualImageExternalId}) is on node: ${proxmoxTemplate?.node}")
-
-		log.debug("PROXMOX TEMPLATE IS: $proxmoxTemplate")
-		log.debug("SELECTED DATASTORES: $wizardDatastores")
-		log.debug("SELECTED NODE DATASTORES: ${proxmoxNode.datastores}")
-		log.debug("SELECTED NETWORKS: $wizardInterfaces")
-		log.debug("SELECTED NODE NETWORKS: ${proxmoxNode.networks}")
-
-		//ensure that we aren't uploading the template for the first time
-		if (proxmoxTemplate) {
-			log.debug("SELECTED TEMPLATE DATASTORES: ${proxmoxTemplate.datastores}")
-			log.debug("TEMPLATE NODE: ${proxmoxTemplate.node}")
-
-			// Only validate cross-node clones
-			if (proxmoxTemplate.node != opts.config.proxmoxNode) {
-				// Check if template storage is truly shared between source and target nodes
-				// A datastore is only considered "shared" if it's accessible from BOTH nodes
-				def hasSharedStorage = false
-				
-				// Get datastores available on the template's source node
-				Map templateNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, proxmoxTemplate.node).data
-				
-				// If template doesn't have datastores populated, try to fetch them
-				if (!proxmoxTemplate.datastores || proxmoxTemplate.datastores.isEmpty()) {
-					log.warn("Template datastores not populated, attempting to fetch from Proxmox API")
-					def freshTemplate = ProxmoxApiComputeUtil.getTemplateById(client, authConfig, virtualImage.externalId.toLong())
-					if (freshTemplate?.success && freshTemplate?.data?.datastores) {
-						proxmoxTemplate.datastores = freshTemplate.data.datastores
-						log.info("Fetched template datastores: ${proxmoxTemplate.datastores}")
-					} else {
-						log.error("Unable to determine template datastores for cross-node validation")
-						def errorMsg = "Cannot perform cross-node clone: Unable to determine storage used by template '${virtualImage.name}' on node '${proxmoxTemplate.node}'."
-						rtn.addError("imageId", errorMsg)
-					}
-				}
-				
-				proxmoxTemplate.datastores.each { String templateDS ->
-					// Check if this datastore exists on both source and target nodes
-					boolean onSourceNode = templateNode?.datastores?.contains(templateDS)
-					boolean onTargetNode = proxmoxNode.datastores.contains(templateDS)
-					
-					if (onSourceNode && onTargetNode) {
-						hasSharedStorage = true
-						log.info("Datastore '$templateDS' is shared between nodes '${proxmoxTemplate.node}' and '${opts.config.proxmoxNode}' - cross-node clone supported.")
-					}
-				}
-				
-				if (!hasSharedStorage) {
-					// No shared storage - check if we can upload/create template on target node instead
-					def cloudFiles = context.async.virtualImage.getVirtualImageFiles(virtualImage).blockingGet()
-					boolean hasUploadableImage = cloudFiles?.any { cloudFile ->
-						cloudFile.name.toLowerCase().endsWith(".qcow2") ||
-						cloudFile.name.toLowerCase().endsWith(".img") ||
-						cloudFile.name.toLowerCase().endsWith(".raw")
-					}
-					
-					if (hasUploadableImage) {
-						log.info("No shared storage available, but template '${virtualImage.name}' has uploadable image file. Will upload/create template on target node '${opts.config.proxmoxNode}'.")
-					} else {
-						// Cannot clone across nodes and cannot upload - this will fail
-						def templateDSList = proxmoxTemplate.datastores?.join(", ") ?: "unknown"
-						def targetNodeDSList = proxmoxNode.datastores?.join(", ") ?: "none"
-						log.error("Error provisioning: Template '${virtualImage.name}' is on node '${proxmoxTemplate.node}' with datastores [$templateDSList] not shared with target node '${opts.config.proxmoxNode}', and no uploadable image file is available.")
-						def errorMsg = "Cross-node clone not possible: Template '${virtualImage.name}' uses storage [$templateDSList] on node '${proxmoxTemplate.node}'. " +
-									   "Target node '${opts.config.proxmoxNode}' has datastores [$targetNodeDSList]. " +
-									   "No shared storage available and no image file found in Morpheus for upload. " +
-									   "Please upload the image file to Morpheus or configure shared storage (e.g., Ceph, NFS) between the nodes."
-						rtn.addError("imageId", errorMsg)
-					}
-				} else {
-					log.info("Template '${virtualImage.name}' is on node '${proxmoxTemplate.node}', but can be cloned to '${opts.config.proxmoxNode}' using shared storage.")
-				}
-			}
-
-			if (rtn.errors && rtn.errors.size() > 0) {
-				rtn.success = false
-				return rtn
-			}
-		}
-
-		//check that each disk datastore is present on the node
-        wizardDatastores.each { Map wizardDS ->
-			if (!proxmoxNode.datastores.contains(wizardDS.storage)) {
-				log.error("Error provisioning: Selected datastore '$wizardDS.storage' is not attached to selected node '${opts.config.proxmoxNode}'.")
-                def errorMsg = String.format(VALIDATION_MSG_DATASTORE_NOT_ATTACHED, wizardDS.storage, opts.config.proxmoxNode)
-                rtn.addError("volume", errorMsg)
-			} else {
-				log.info("Datastore '$wizardDS.storage' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
-			}
-
-            if (rtn.errors && rtn.errors.size() > 0) {
-                rtn.success = false
-                return rtn
-            }
-		}
-
-		//check that selected networks are attached to host
-		wizardInterfaces.each { Map wizardNetwork ->
-			if (!proxmoxNode.networks.contains(wizardNetwork.network.name)) {
-				log.error("Error provisioning: Selected network '${wizardNetwork.network.name}' is not attached to selected node '${opts.config.proxmoxNode}'.")
-                def errorMsg = String.format(VALIDATION_MSG_NETWORK_NOT_ATTACHED, wizardNetwork.network.name, opts.config.proxmoxNode)
-                rtn.addError("networkInterface", errorMsg)
-			} else {
-				log.info("Network '$wizardNetwork.network.name' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
-			}
-		}
-
-		if (rtn.errors && rtn.errors.size() > 0) {
-			rtn.success = false
 		}
 
 		return rtn
@@ -563,6 +427,38 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				)
 			}
 
+			// Validate datastores and networks are attached to target node
+			log.info("Validating node resources for provisioning on node: $nodeId")
+			Map proxmoxNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, nodeId).data
+			
+			// Check datastores
+			server.volumes.each { vol ->
+				if (vol.datastore?.externalId && !proxmoxNode.datastores?.contains(vol.datastore.externalId)) {
+					def errorMsg = "Provisioning failed: Selected datastore '${vol.datastore.externalId}' is not attached to node '${nodeId}'"
+					log.error(errorMsg)
+					return new ServiceResponse<ProvisionResponse>(
+							false,
+							errorMsg,
+							null,
+							new ProvisionResponse(success: false)
+					)
+				}
+			}
+			
+			// Check networks
+			server.interfaces.each { iface ->
+				if (iface.network?.name && !proxmoxNode.networks?.contains(iface.network.name)) {
+					def errorMsg = "Provisioning failed: Selected network '${iface.network.name}' is not attached to node '${nodeId}'"
+					log.error(errorMsg)
+					return new ServiceResponse<ProvisionResponse>(
+							false,
+							errorMsg,
+							null,
+							new ProvisionResponse(success: false)
+					)
+				}
+			}
+
 			DatastoreIdentity imgDS
 			try {
 				imgDS = context.cloud.datastore.getDefaultImageDatastoreForAccount(server.cloud.id, server.cloud.account.id).blockingGet()
@@ -634,13 +530,21 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 
 			ServiceResponse rtnClone = ProxmoxApiComputeUtil.cloneTemplate(client, authConfig, imageExternalId, workload.getInstance().name, nodeId, server)
 
-			log.debug("VM Clone done. Results: $rtnClone")
-
-			server.internalId = rtnClone.data.vmId
-			server.externalId = rtnClone.data.vmId
 			if (!rtnClone.success) {
-				log.error("Provisioning/clone failed: $rtnClone.msg")
-				return ServiceResponse.error("Provisioning failed: $rtnClone.msg")
+				def errorMessage = rtnClone.error ?: rtnClone.msg ?: 'Provisioning failed'
+				log.error("Provisioning failed: ${errorMessage}")
+				
+				// Set the error message on the server for display in UI
+				server.statusMessage = errorMessage
+				server.status = 'failed'
+				saveAndGet(server)
+				
+				return new ServiceResponse<ProvisionResponse>(
+						false,
+						errorMessage,
+						[(server.id.toString()): errorMessage], // Pass error as map for UI display
+						new ProvisionResponse(success: false)
+				)
 			}
 
 			server.internalId = rtnClone.data.vmId
