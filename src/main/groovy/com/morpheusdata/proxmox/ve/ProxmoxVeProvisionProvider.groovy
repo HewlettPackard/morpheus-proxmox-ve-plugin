@@ -326,6 +326,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
             return rtn
         }
 
+        HttpApiClient client = new HttpApiClient()
 		Cloud cloud = context.async.cloud.get(opts.zoneId?.toLong()).blockingGet()
 		ComputeServer selectedNode = getHypervisorHostByExternalId(cloud.id, opts.config.proxmoxNode)
 
@@ -335,7 +336,86 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			return rtn
 		}
 
-		return rtn
+        Map authConfig = plugin.getAuthConfig(cloud)
+
+        List<Map> wizardInterfaces = opts.networkInterfaces
+        List<Map> instanceDisks = opts.volumes
+        Long imageId = opts.config.imageId as Long
+        Map proxmoxNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, opts.config.proxmoxNode).data
+
+        //get proxmox datastores from API using morpheus datastore IDs from wizard
+        List<String> wizardDatastoreExternalIds = []
+        opts.volumes.each {
+            if (it.datastoreId != "auto") {
+                wizardDatastoreExternalIds << context.async.cloud.datastore.listById([it.datastoreId as Long]).blockingFirst().externalId
+            }
+        }
+        List<Map> wizardDatastores = ProxmoxApiComputeUtil.getProxmoxDatastoresById(client, authConfig, wizardDatastoreExternalIds).data
+
+        //get virtualImage Datastores
+        def virtualImage = context.async.virtualImage.listById([imageId]).blockingFirst()
+        def virtualImageExternalId = virtualImage.externalId as Long
+        def proxmoxTemplate = ProxmoxApiComputeUtil.getTemplateById(client, authConfig, virtualImageExternalId).data
+
+        log.debug("PROXMOX TEMPLATE IS: $proxmoxTemplate")
+        log.debug("SELECTED DATASTORES: $wizardDatastores")
+        log.debug("SELECTED NODE DATASTORES: ${proxmoxNode.datastores}")
+        log.debug("SELECTED NETWORKS: $wizardInterfaces")
+        log.debug("SELECTED NODE NETWORKS: ${proxmoxNode.networks}")
+
+        //ensure that we aren't uploading the template for the first time
+        if (proxmoxTemplate) {
+            log.debug("SELECTED TEMPLATE DATASTORES: ${proxmoxTemplate.datastores}")
+
+            //Check that the node can see see the template disk to copy it
+            proxmoxTemplate.datastores.each { String templateDS ->
+                if (!proxmoxNode.datastores.contains(templateDS)) {
+                    log.error("Error provisioning: Selected Virtual Image '${virtualImage.name}' disk datastore '$templateDS' is not attached to selected node '${opts.config.proxmoxNode}'.")
+                    def errorMsg = String.format(VALIDATION_MSG_IMAGE_DATASTORE_NOT_ATTACHED, virtualImage.name, templateDS, opts.config.proxmoxNode)
+                    rtn.addError("imageId", errorMsg)
+                } else {
+                    log.info("Datastore '$templateDS' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
+                }
+            }
+
+            if (rtn.errors && rtn.errors.size() > 0) {
+                rtn.success = false
+                return rtn
+            }
+        }
+
+        //check that each disk datastore is present on the node
+        wizardDatastores.each { Map wizardDS ->
+            if (!proxmoxNode.datastores.contains(wizardDS.storage)) {
+                log.error("Error provisioning: Selected datastore '$wizardDS.storage' is not attached to selected node '${opts.config.proxmoxNode}'.")
+                def errorMsg = String.format(VALIDATION_MSG_DATASTORE_NOT_ATTACHED, wizardDS.storage, opts.config.proxmoxNode)
+                rtn.addError("volume", errorMsg)
+            } else {
+                log.info("Datastore '$wizardDS.storage' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
+            }
+
+            if (rtn.errors && rtn.errors.size() > 0) {
+                rtn.success = false
+                return rtn
+            }
+        }
+
+        //check that selected networks are attached to host
+        wizardInterfaces.each { Map wizardNetwork ->
+            if (!proxmoxNode.networks.contains(wizardNetwork.network.name)) {
+                log.error("Error provisioning: Selected network '${wizardNetwork.network.name}' is not attached to selected node '${opts.config.proxmoxNode}'.")
+                def errorMsg = String.format(VALIDATION_MSG_NETWORK_NOT_ATTACHED, wizardNetwork.network.name, opts.config.proxmoxNode)
+                rtn.addError("networkInterface", errorMsg)
+            } else {
+                log.info("Network '$wizardNetwork.network.name' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
+            }
+        }
+
+        if (rtn.errors && rtn.errors.size() > 0) {
+            rtn.success = false
+        }
+
+        return rtn
 	}
 
     private ServiceResponse validateProvisioningOptions(Map opts) {
@@ -425,38 +505,6 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 								success: false
 						)
 				)
-			}
-
-			// Validate datastores and networks are attached to target node
-			log.info("Validating node resources for provisioning on node: $nodeId")
-			Map proxmoxNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, nodeId).data
-			
-			// Check datastores
-			server.volumes.each { vol ->
-				if (vol.datastore?.externalId && !proxmoxNode.datastores?.contains(vol.datastore.externalId)) {
-					def errorMsg = "Provisioning failed: Selected datastore '${vol.datastore.externalId}' is not attached to node '${nodeId}'"
-					log.error(errorMsg)
-					return new ServiceResponse<ProvisionResponse>(
-							false,
-							errorMsg,
-							null,
-							new ProvisionResponse(success: false)
-					)
-				}
-			}
-			
-			// Check networks
-			server.interfaces.each { iface ->
-				if (iface.network?.name && !proxmoxNode.networks?.contains(iface.network.name)) {
-					def errorMsg = "Provisioning failed: Selected network '${iface.network.name}' is not attached to node '${nodeId}'"
-					log.error(errorMsg)
-					return new ServiceResponse<ProvisionResponse>(
-							false,
-							errorMsg,
-							null,
-							new ProvisionResponse(success: false)
-					)
-				}
 			}
 
 			DatastoreIdentity imgDS
