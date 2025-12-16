@@ -61,7 +61,7 @@ class DatastoreSync {
             }.onUpdate { List<SyncTask.UpdateItem<Datastore, Map>> updateItems ->
                 updateMatchedDatastores(cloud, updateItems)
             }.onDelete { removeItems ->
-                removeMissingDatastores(cloud, removeItems)
+                removeMissingDatastores(removeItems)
             }.start()
 
         }
@@ -93,8 +93,9 @@ class DatastoreSync {
                 Datastore add = new Datastore(datastoreConfig)
                 adds << add
             }
-            if (adds.size() > 1) {
+            if (adds.size() > 0) {
                 morpheusContext.async.cloud.datastore.bulkCreate(adds).blockingGet()
+                log.info("Added ${adds.size()} datastores to cloud ${cloud.name}")
             }
         } catch (e) {
             log.error "Error in addMissingDatastores: ${e}", e
@@ -139,9 +140,8 @@ class DatastoreSync {
         // Openstack - https://github.com/gomorpheus/morpheus-nutanix-prism-plugin/blob/master/src/main/groovy/com/morpheusdata/nutanix/prism/plugin/sync/DatastoresSync.groovy
     }
 
-
-    private removeMissingDatastores(List<Datastore> removeItems) {
-        log.debug("Remove Datastores $removeItems...")
-        morpheusContext.async.cloud.datastore.bulkRemove(removeItems).blockingGet()
+    private removeMissingDatastores(List<DatastoreIdentity> removeItems) {
+        log.info("Removing Datastores that no longer exist")
+        morpheusContext.services.cloud.datastore.bulkRemove(removeItems)
     }
 }

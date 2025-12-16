@@ -63,7 +63,10 @@ class ProxmoxVeCloudProvider implements CloudProvider {
 	 */
 	@Override
 	Icon getIcon() {
-		return new Icon(path:'proxmox-full-lockup-color.svg', darkPath:'proxmox-full-lockup-inverted-color.svg')
+		return new Icon(
+			path: Assets.PROXMOX_FULL_LOCKUP.path,
+			darkPath: Assets.PROXMOX_FULL_LOCKUP_INVERTED.path
+		)
 	}
 
 	/**
@@ -73,7 +76,10 @@ class ProxmoxVeCloudProvider implements CloudProvider {
 	 */
 	@Override
 	Icon getCircularIcon() {
-		return new Icon(path:'proxmox-logo-stacked-color.svg', darkPath:'proxmox-logo-stacked-inverted-color.svg')
+		return new Icon(
+			path: Assets.PROXMOX_LOGO_STACKED.path,
+			darkPath: Assets.PROXMOX_LOGO_STACKED_INVERTED.path
+		)
 	}
 
 	/**
@@ -157,7 +163,7 @@ class ProxmoxVeCloudProvider implements CloudProvider {
 				fieldCode: 'gomorpheus.optiontype.HostUserName',
 				fieldName: 'hostUsername',
 				inputType: OptionType.InputType.TEXT,
-				localCredential: true,
+				localCredential: false,
 				required: true
 		)
 		options << new OptionType(
@@ -169,7 +175,7 @@ class ProxmoxVeCloudProvider implements CloudProvider {
 				fieldCode: 'gomorpheus.optiontype.HostPassword',
 				fieldName: 'hostPassword',
 				inputType: OptionType.InputType.PASSWORD,
-				localCredential: true,
+				localCredential: false,
 				required: true
 		)
 

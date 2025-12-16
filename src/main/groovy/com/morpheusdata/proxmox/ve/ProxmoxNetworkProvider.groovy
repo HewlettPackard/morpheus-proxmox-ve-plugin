@@ -95,7 +95,9 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 				name: cloud.name,
 				type: new NetworkServerType(code:"proxmox-ve.network")
 			)
-			morpheus.integration.registerCloudIntegration(cloud.id, networkServer).blockingGet()
+			morpheus.services.integration.registerCloudIntegration(cloud.id, networkServer)
+			morpheus.services.cloud.save(cloud)
+
 			rtn.success = true
 		} catch (Exception e) {
 			rtn.success = false

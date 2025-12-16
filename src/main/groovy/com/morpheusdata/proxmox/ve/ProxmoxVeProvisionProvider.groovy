@@ -52,6 +52,15 @@ import groovy.util.logging.Slf4j
 class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements VmProvisionProvider, WorkloadProvisionProvider, WorkloadProvisionProvider.ResizeFacet, HostProvisionProvider.ResizeFacet { //, ProvisionProvider.BlockDeviceNameFacet {
 	public static final String PROVISION_PROVIDER_CODE = 'proxmox-provision-provider'
 
+    // Validation error messages
+    private static final String VALIDATION_MSG_NO_NODE = 'Please select a ProxMox node'
+    private static final String VALIDATION_MSG_NO_IMAGE = 'Please select a virtual image'
+    private static final String VALIDATION_MSG_NO_NETWORK = 'Please select a network'
+    private static final String VALIDATION_MSG_INACTIVE_NODE = 'This ProxMox node is currently inactive. Please select an active node'
+    private static final String VALIDATION_MSG_IMAGE_DATASTORE_NOT_ATTACHED = "Invalid instance config: Selected Virtual Image '%s' disk datastore '%s' is not attached to selected node '%s'."
+    private static final String VALIDATION_MSG_DATASTORE_NOT_ATTACHED = "Invalid instance config: Selected datastore '%s' is not attached to selected node '%s'."
+    private static final String VALIDATION_MSG_NETWORK_NOT_ATTACHED = "Invalid instance config: Selected network '%s' is not attached to selected node '%s'."
+
 	protected MorpheusContext context
 	protected ProxmoxVePlugin plugin
 
@@ -132,8 +141,10 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	 */
 	@Override
 	Icon getCircularIcon() {
-		// TODO: change icon paths to correct filenames once added to your project
-		return new Icon(path:'provision-circular.svg', darkPath:'provision-circular-dark.svg')
+		return new Icon(
+			path: Assets.PROXMOX_LOGO_STACKED.path,
+			darkPath: Assets.PROXMOX_LOGO_STACKED_INVERTED.path
+		)
 	}
 
 	/**
@@ -303,17 +314,28 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	 */
 	@Override
 	ServiceResponse validateWorkload(Map opts) {
-		log.debug("VALIDATION OPTS: $opts")
-		def rtn =  new ServiceResponse(true, null, [:], null)
+        log.debug("VALIDATION OPTS: $opts")
 
-		HttpApiClient client = new HttpApiClient()
+		def rtn = ServiceResponse.success()
+
+        // Node, image and network fields are required
+        def basicValidation = validateProvisioningOptions(opts)
+        if(!basicValidation.success) {
+            rtn.success = false
+            rtn.errors = basicValidation.errors
+            return rtn
+        }
+
+        HttpApiClient client = new HttpApiClient()
 		Cloud cloud = context.async.cloud.get(opts.zoneId?.toLong()).blockingGet()
 		ComputeServer selectedNode = getHypervisorHostByExternalId(cloud.id, opts.config.proxmoxNode)
-		if(selectedNode && selectedNode.powerState != ComputeServer.PowerState.on) {
+
+        if(selectedNode && selectedNode.powerState != ComputeServer.PowerState.on) {
 			rtn.success = false
-			rtn.errors = [field: 'proxmoxNode', msg: 'This Proxmox node is currently inactive. Please select an active node.']
+			rtn.addError("proxmoxNode", VALIDATION_MSG_INACTIVE_NODE)
 			return rtn
 		}
+
 		Map authConfig = plugin.getAuthConfig(cloud)
 
 		List<Map> wizardInterfaces = opts.networkInterfaces
@@ -345,50 +367,88 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		if (proxmoxTemplate) {
 			log.debug("SELECTED TEMPLATE DATASTORES: ${proxmoxTemplate.datastores}")
 
-
 			//Check that the node can see see the template disk to copy it
 			proxmoxTemplate.datastores.each { String templateDS ->
 				if (!proxmoxNode.datastores.contains(templateDS)) {
-					log.error("Error provisioning: Selected template (virtual image) '${virtualImage.name}' disk datastore '$templateDS' is not attached to selected node '${opts.config.proxmoxNode}'.")
-					rtn.errors += [field: "imageId", msg: "Invalid instance config: Selected Virtual Image '${virtualImage.name}' disk datastore '$templateDS' is not attached to selected node '${opts.config.proxmoxNode}'."]
+                    log.error("Error provisioning: Selected Virtual Image '${virtualImage.name}' disk datastore '$templateDS' is not attached to selected node '${opts.config.proxmoxNode}'.")
+                    def errorMsg = String.format(VALIDATION_MSG_IMAGE_DATASTORE_NOT_ATTACHED, virtualImage.name, templateDS, opts.config.proxmoxNode)
+                    rtn.addError("imageId", errorMsg)
 				} else {
 					log.info("Datastore '$templateDS' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
 				}
 			}
+
+            if (rtn.errors && rtn.errors.size() > 0) {
+                rtn.success = false
+                return rtn
+            }
 		}
 
 		//check that each disk datastore is present on the node
-		wizardDatastores.each { Map wizardDS ->
+        wizardDatastores.each { Map wizardDS ->
 			if (!proxmoxNode.datastores.contains(wizardDS.storage)) {
 				log.error("Error provisioning: Selected datastore '$wizardDS.storage' is not attached to selected node '${opts.config.proxmoxNode}'.")
-				rtn.errors += [field: "volumes", msg: "Selected datastore '$wizardDS.storage' is not attached to selected node '${opts.config.proxmoxNode}'."]
+                def errorMsg = String.format(VALIDATION_MSG_DATASTORE_NOT_ATTACHED, wizardDS.storage, opts.config.proxmoxNode)
+                rtn.addError("volume", errorMsg)
 			} else {
 				log.info("Datastore '$wizardDS.storage' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
 			}
+
+            if (rtn.errors && rtn.errors.size() > 0) {
+                rtn.success = false
+                return rtn
+            }
 		}
 
 		//check that selected networks are attached to host
 		wizardInterfaces.each { Map wizardNetwork ->
 			if (!proxmoxNode.networks.contains(wizardNetwork.network.name)) {
 				log.error("Error provisioning: Selected network '${wizardNetwork.network.name}' is not attached to selected node '${opts.config.proxmoxNode}'.")
-				rtn.errors += [field: "networks", msg: "Selected network '${wizardNetwork.network.name}' is not attached to selected node '${opts.config.proxmoxNode}'."]
+                def errorMsg = String.format(VALIDATION_MSG_NETWORK_NOT_ATTACHED, wizardNetwork.network.name, opts.config.proxmoxNode)
+                rtn.addError("networkInterface", errorMsg)
 			} else {
-				log.info("Datastore '$wizardNetwork.network.name' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
+				log.info("Network '$wizardNetwork.network.name' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
 			}
 		}
 
-		if (rtn.errors) {
+		if (rtn.errors && rtn.errors.size() > 0) {
 			rtn.success = false
 		}
 
-
-		//rtn.errors += [field: "networkInterface", msg: "Network not available on node"]
-		//"Testing provisioning halt.",
-		//["network": "Network not available on node", "storage": "Storage not availalbe on node"],
-		//"Test data"
-		//)
 		return rtn
 	}
+
+    private ServiceResponse validateProvisioningOptions(Map opts) {
+        def rtn = ServiceResponse.success()
+
+        if (!opts.config.proxmoxNode) {
+            rtn.addError("proxmoxNode", VALIDATION_MSG_NO_NODE)
+        }
+
+        if (!opts.config.imageId) {
+            rtn.addError("imageId", VALIDATION_MSG_NO_IMAGE)
+        }
+
+        if (opts.networkInterfaces?.size() > 0) {
+            def hasNetwork = true
+            opts.networkInterfaces?.each {
+                if (!it.network.group && it.network.id == null) {
+                    hasNetwork = false
+                }
+            }
+            if (!hasNetwork) {
+                rtn.addError("networkInterface", VALIDATION_MSG_NO_NETWORK)
+            }
+        } else {
+            rtn.addError("networkInterface", VALIDATION_MSG_NO_NETWORK)
+        }
+
+        if (rtn.errors?.size() > 0) {
+            rtn.success = false
+        }
+
+        return rtn
+    }
 
 	/**
 	 * This method is a key entry point in provisioning a workload. This could be a vm, a container, or something else.

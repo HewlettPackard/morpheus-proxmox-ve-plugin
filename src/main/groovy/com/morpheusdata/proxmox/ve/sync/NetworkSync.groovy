@@ -39,11 +39,13 @@ class NetworkSync {
     def execute() {
         try {
 
-            log.debug "BEGIN: execute NetworkSync: ${cloud.id}"
+            log.debug "Execute NetworkSync STARTED: ${cloud.id}"
 
             def cloudItems = ProxmoxApiComputeUtil.listProxmoxNetworks(apiClient, authConfig, true)
             def domainRecords = morpheusContext.async.network.listIdentityProjections(
-                    new DataQuery().withFilter('typeCode', "proxmox.ve.bridge.$cloud.id")
+                    new DataQuery()
+                            .withFilter('refType', "ComputeZone")
+                            .withFilter('refId', cloud.id)
             )
 
             SyncTask<NetworkIdentityProjection, Map, Network> syncTask = new SyncTask<>(domainRecords, cloudItems.data)
@@ -80,7 +82,7 @@ class NetworkSync {
         def networks = []
         try {
             for(cloudItem in addList) {
-                log.debug("Adding Network: $cloudItem")
+                log.info("Adding network: ${cloudItem.iface}")
                 if (!['bridge','vlan','vnet'].contains(cloudItem?.type)) {
                     cloudItem.type = 'unknown'
                 }
@@ -108,7 +110,7 @@ class NetworkSync {
                         dhcpServer   : true,
                 )
             }
-            log.debug("Saving ${networks.size()} Networks")
+            log.debug("Saving ${networks.size()} networks")
             if (!morpheusContext.async.network.bulkCreate(networks).blockingGet()){
                 log.error "Error saving new networks!"
             }
