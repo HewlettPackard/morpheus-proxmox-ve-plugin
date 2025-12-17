@@ -93,7 +93,7 @@ class DatastoreSync {
                     allowProvision : supportsImages,
                     refType        : 'ComputeZone',
                     refId          : cloud.id,
-                    rawData        : [nodes: cloudItem.nodes, type: cloudItem.type, content: cloudItem.content]
+                    rawData        : cloudItem.nodes
                 ]
                 log.warn("Adding datastore: $datastoreConfig")
                 Datastore add = new Datastore(datastoreConfig)
@@ -133,7 +133,7 @@ class DatastoreSync {
                             allowProvision : supportsImages,
                             refType        : 'ComputeZone',
                             refId          : cloud.id,
-                            rawData        : [nodes: cloudItem.nodes, type: cloudItem.type, content: cloudItem.content]
+                            rawData        : cloudItem.nodes
                     ]
 
                     if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, datastoreFieldValueMap)) {
