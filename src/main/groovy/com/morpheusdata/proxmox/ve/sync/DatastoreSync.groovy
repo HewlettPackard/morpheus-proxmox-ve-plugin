@@ -76,7 +76,7 @@ class DatastoreSync {
             itemsToAdd?.each { cloudItem ->
                 log.debug("Adding datastore: $cloudItem")
                 // Only allow provisioning if datastore supports VM disk images
-                boolean supportsImages = cloudItem.supportsImages == true
+                boolean supportsImages = cloudItem.content?.toLowerCase()?.contains("images") ?: false
                 if (!supportsImages) {
                     log.info("Datastore '${cloudItem.storage}' does not support VM images (content: ${cloudItem.content}). Setting allowProvision to false.")
                 }
@@ -117,7 +117,7 @@ class DatastoreSync {
                 def cloudItem = updateItem.masterItem
 
                     // Only allow provisioning if datastore supports VM disk images
-                    boolean supportsImages = cloudItem.supportsImages == true
+                    boolean supportsImages = cloudItem.content?.toLowerCase()?.contains("images") ?: false
                     if (!supportsImages) {
                         log.info("Datastore '${cloudItem.storage}' does not support VM images (content: ${cloudItem.content}). Setting allowProvision to false.")
                     }
