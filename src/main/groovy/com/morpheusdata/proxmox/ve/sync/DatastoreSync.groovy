@@ -95,7 +95,7 @@ class DatastoreSync {
                     refId          : cloud.id,
                     rawData        : cloudItem.nodes
                 ]
-                log.warn("Adding datastore: $datastoreConfig")
+                log.info("Adding datastore: $datastoreConfig")
                 Datastore add = new Datastore(datastoreConfig)
                 adds << add
             }
