@@ -75,19 +75,25 @@ class DatastoreSync {
             def adds = []
             itemsToAdd?.each { cloudItem ->
                 log.debug("Adding datastore: $cloudItem")
+                // Only allow provisioning if datastore supports VM disk images
+                boolean supportsImages = cloudItem.supportsImages == true
+                if (!supportsImages) {
+                    log.info("Datastore '${cloudItem.storage}' does not support VM images (content: ${cloudItem.content}). Setting allowProvision to false.")
+                }
                 def datastoreConfig = [
-                    owner       : new Account(id: cloud.owner.id),
-                    name        : cloudItem.storage,
-                    externalId  : cloudItem.storage,
-                    cloud       : cloud,
-                    storageSize : cloudItem.total.toLong(),
-                    freeSpace   : cloudItem.avail.toLong(),
-                    category    : "proxmox-ve-datastore.${cloud.id}",
-                    drsEnabled  : false,
-                    online      : true,
-                    refType     : 'ComputeZone',
-                    refId       : cloud.id,
-                    rawData     : cloudItem.nodes
+                    owner          : new Account(id: cloud.owner.id),
+                    name           : cloudItem.storage,
+                    externalId     : cloudItem.storage,
+                    cloud          : cloud,
+                    storageSize    : cloudItem.total.toLong(),
+                    freeSpace      : cloudItem.avail.toLong(),
+                    category       : "proxmox-ve-datastore.${cloud.id}",
+                    drsEnabled     : false,
+                    online         : true,
+                    allowProvision : supportsImages,
+                    refType        : 'ComputeZone',
+                    refId          : cloud.id,
+                    rawData        : [nodes: cloudItem.nodes, type: cloudItem.type, content: cloudItem.content]
                 ]
                 log.warn("Adding datastore: $datastoreConfig")
                 Datastore add = new Datastore(datastoreConfig)
@@ -110,18 +116,24 @@ class DatastoreSync {
                 def existingItem = updateItem.existingItem
                 def cloudItem = updateItem.masterItem
 
+                    // Only allow provisioning if datastore supports VM disk images
+                    boolean supportsImages = cloudItem.supportsImages == true
+                    if (!supportsImages) {
+                        log.info("Datastore '${cloudItem.storage}' does not support VM images (content: ${cloudItem.content}). Setting allowProvision to false.")
+                    }
                     Map datastoreFieldValueMap = [
-                            owner      : new Account(id: cloud.owner.id),
-                            name       : cloudItem.storage,
-                            cloud      : cloud,
-                            storageSize: cloudItem.total.toLong(),
-                            freeSpace  : cloudItem.avail.toLong(),
-                            category   : "proxmox-ve-datastore.${cloud.id}",
-                            drsEnabled : false,
-                            online     : true,
-                            refType    : 'ComputeZone',
-                            refId      : cloud.id,
-                            rawData    : cloudItem.nodes
+                            owner          : new Account(id: cloud.owner.id),
+                            name           : cloudItem.storage,
+                            cloud          : cloud,
+                            storageSize    : cloudItem.total.toLong(),
+                            freeSpace      : cloudItem.avail.toLong(),
+                            category       : "proxmox-ve-datastore.${cloud.id}",
+                            drsEnabled     : false,
+                            online         : true,
+                            allowProvision : supportsImages,
+                            refType        : 'ComputeZone',
+                            refId          : cloud.id,
+                            rawData        : [nodes: cloudItem.nodes, type: cloudItem.type, content: cloudItem.content]
                     ]
 
                     if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, datastoreFieldValueMap)) {
