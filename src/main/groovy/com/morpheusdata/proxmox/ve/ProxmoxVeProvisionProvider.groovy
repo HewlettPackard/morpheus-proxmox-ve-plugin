@@ -1138,6 +1138,9 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			def neededCores = (requestedCores ?: 1) - (currentCores ?: 1)
 			def allocationSpecs = [externalId: computeServer.externalId, maxMemory: requestedMemory, maxCpu: requestedCores]
 			if (neededMemory > 100000000l || neededMemory < -100000000l || neededCores != 0) {
+				log.debug("Resizing VM with specs: ${allocationSpecs}")
+				log.debug("Resizing vm: ${computeServer.name} with $computeServer.coresPerSocket cores and $computeServer.maxMemory memory")
+				
 				def resizeResult = ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, computeServer.volumes?.toList() ?: [], computeServer.interfaces?.toList() ?: [])
 
 				if (!resizeResult.success) {
