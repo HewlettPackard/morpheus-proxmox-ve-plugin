@@ -1103,7 +1103,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		def rtn = ServiceResponse.success()
 		responses.findAll {!it.success }.each {
 			rtn.success = false
-			rtn.error += "$it.error\n"
+			rtn.msg = (rtn.msg ?: '') + (it.msg ?: it.error ?: 'Unknown error') + '\n'
 		}
 
 		return rtn
@@ -1139,18 +1139,36 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			def allocationSpecs = [externalId: computeServer.externalId, maxMemory: requestedMemory, maxCpu: requestedCores]
 			if (neededMemory > 100000000l || neededMemory < -100000000l || neededCores != 0) {
 				log.debug("Resizing VM with specs: ${allocationSpecs}")
-				log.debug("Resizing vm: ${computeServer.name} with $server.coresPerSocket cores and $server.maxMemory memory")
+				log.debug("Resizing vm: ${computeServer.name} with $computeServer.coresPerSocket cores and $computeServer.maxMemory memory")
+				
+				def resizeResult = ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, computeServer.volumes?.toList() ?: [], computeServer.interfaces?.toList() ?: [])
 
-				ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, [], [])
+				if (!resizeResult.success) {
+					log.error("Resize API call failed: ${resizeResult.msg}")
+					computeServer.status = 'provisioned'
+					computeServer.statusMessage = "Resize failed: ${resizeResult.msg}"
+					saveAndGet(computeServer)
+					return new ServiceResponse(success: false, msg: "Resize failed: ${resizeResult.msg}")
+				}
+
+				computeServer.maxMemory = requestedMemory
+				computeServer.maxCores = requestedCores
+				computeServer.coresPerSocket = 1
+			} else {
+				log.info("No resize needed - changes too small (neededMemory: ${neededMemory}, neededCores: ${neededCores})")
 			}
+
+			computeServer.status = 'provisioned'
+			computeServer.statusMessage = null
+			computeServer = saveAndGet(computeServer)
 		} catch (e) {
-			log.error("Unable to resize workload: ${e.message}", e)
+			log.error("Exception during resize workload: ${e.message}", e)
 			computeServer.status = 'provisioned'
 			computeServer.statusMessage = "Unable to resize server: ${e.message}"
 			saveAndGet(computeServer)
 			return new ServiceResponse(success: false, msg: "Unable to resize server: ${e.message}")
 		}
-		return new ServiceResponse(success: true, msg: "Server resized")
+		return new ServiceResponse(success: true, msg: "Server resized successfully")
 	}
 
 
@@ -1220,7 +1238,8 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		}
 
 		if (responses.any{!it.success }) {
-			return new ServiceResponse(success: false, msg: "${responses.collect{'$it.error\n'}}")
+			def errorMessages = responses.findAll{!it.success}.collect{ it.msg ?: it.error ?: 'Disk operation failed' }.join("; ")
+			return new ServiceResponse(success: false, msg: errorMessages)
 		}
 		return new ServiceResponse(success: true, msg: "VM Disk Volumes Updated")
 	}
@@ -1273,7 +1292,11 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			context.async.computeServer.computeServerInterface.create(newInterfaces, server).blockingGet()
 		}
 
-		return new ServiceResponse()
+		if (responses.any{!it.success }) {
+			def errorMessages = responses.findAll{!it.success}.collect{ it.msg ?: it.error ?: 'Network operation failed' }.join("; ")
+			return new ServiceResponse(success: false, msg: errorMessages)
+		}
+		return new ServiceResponse(success: true, msg: "VM Network Interfaces Updated")
 	}
 
 
