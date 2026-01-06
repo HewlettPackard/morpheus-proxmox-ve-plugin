@@ -63,7 +63,9 @@ class ProxmoxSshUtil {
 
         log.info("Importing disk: qm importdisk $imageExternalId $remoteImagePath $targetDS")
         context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm importdisk $imageExternalId $remoteImagePath $targetDS", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
-        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 $targetDS:vm-$imageExternalId-disk-0 --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        
+        log.info("Attaching imported disk to scsi0")
+        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 $targetDS:$imageExternalId/vm-$imageExternalId-disk-0.raw --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
 
         return imageExternalId
     }
