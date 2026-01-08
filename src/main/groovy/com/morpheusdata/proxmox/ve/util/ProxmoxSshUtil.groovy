@@ -62,10 +62,39 @@ class ProxmoxSshUtil {
         def imageExternalId = templateResp.data.templateId
 
         log.info("Importing disk: qm importdisk $imageExternalId $remoteImagePath $targetDS")
-        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm importdisk $imageExternalId $remoteImagePath $targetDS", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        TaskResult importResult = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm importdisk $imageExternalId $remoteImagePath $targetDS", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
         
-        log.info("Attaching imported disk to scsi0")
-        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 $targetDS:$imageExternalId/vm-$imageExternalId-disk-0.raw --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        String diskId = null
+        if (importResult.output) {
+            def matcher = importResult.output =~ /unused\d+:(.+?)['"\s]/
+            if (matcher.find()) {  
+                diskId = matcher.group(1)
+                log.info("Detected imported disk identifier from output: ${diskId}")
+            }
+        }
+        
+        if (!diskId) {
+            log.info("Could not parse disk ID from import output, constructing based on image format")
+            String imageFileName = remoteImagePath.substring(remoteImagePath.lastIndexOf('/') + 1)
+            
+            // Check if image is raw or qcow2 format 
+            if (imageFileName.toLowerCase().endsWith('.raw') || imageFileName.toLowerCase().endsWith('.qcow2')) {
+                // Directory-based storage 
+                String extension = imageFileName.substring(imageFileName.lastIndexOf('.'))
+                diskId = "$targetDS:$imageExternalId/vm-$imageExternalId-disk-0$extension"
+                log.info("Using directory-based storage format with extension: ${diskId}")
+            } else {
+                // Block-based storage 
+                diskId = "$targetDS:vm-$imageExternalId-disk-0"
+                log.info("Using block-based storage format (no directory/extension): ${diskId}")
+            }
+        }
+        
+        log.info("Attaching imported disk to scsi0: ${diskId}")
+        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 ${diskId} --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+
+        log.info("Enabling QEMU guest agent for template")
+        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --agent enabled=1", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
 
         return imageExternalId
     }
