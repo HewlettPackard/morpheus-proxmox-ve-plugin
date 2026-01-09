@@ -56,12 +56,12 @@ class ProxmoxSshUtil {
      * Create a template from an image file on Proxmox node
      */
     public static String createTemplateFromImage(MorpheusContext context, HttpApiClient client, Map authConfig, VirtualImage virtualImage, ComputeServer hvNode, String targetDS, String remoteImagePath) {
-        log.info("Creating template from image on node $hvNode.name, datastore $targetDS")
+        log.debug("Creating template from image on node $hvNode.name, datastore $targetDS")
 
         ServiceResponse templateResp = ProxmoxApiComputeUtil.createImageTemplate(client, authConfig, virtualImage.name, hvNode.externalId, DEFAULT_TEMPLATE_CPUS, DEFAULT_TEMPLATE_MEMORY)
         def imageExternalId = templateResp.data.templateId
 
-        log.info("Importing disk: qm importdisk $imageExternalId $remoteImagePath $targetDS")
+        log.debug("Importing disk: qm importdisk $imageExternalId $remoteImagePath $targetDS")
         TaskResult importResult = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm importdisk $imageExternalId $remoteImagePath $targetDS", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
         
         String diskId = null
@@ -69,7 +69,7 @@ class ProxmoxSshUtil {
             def matcher = importResult.output =~ /unused\d+:(.+?)['"\s]/
             if (matcher.find()) {  
                 diskId = matcher.group(1)
-                log.info("Detected imported disk identifier from output: ${diskId}")
+                log.debug("Detected imported disk identifier from output: ${diskId}")
             }
         }
         
@@ -82,18 +82,18 @@ class ProxmoxSshUtil {
                 // Directory-based storage 
                 String extension = imageFileName.substring(imageFileName.lastIndexOf('.'))
                 diskId = "$targetDS:$imageExternalId/vm-$imageExternalId-disk-0$extension"
-                log.info("Using directory-based storage format with extension: ${diskId}")
+                log.debug("Using directory-based storage format with extension: ${diskId}")
             } else {
                 // Block-based storage 
                 diskId = "$targetDS:vm-$imageExternalId-disk-0"
-                log.info("Using block-based storage format (no directory/extension): ${diskId}")
+                log.debug("Using block-based storage format (no directory/extension): ${diskId}")
             }
         }
         
-        log.info("Attaching imported disk to scsi0: ${diskId}")
+        log.debug("Attaching imported disk to scsi0: ${diskId}")
         context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 ${diskId} --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
 
-        log.info("Enabling QEMU guest agent for template")
+        log.debug("Enabling QEMU guest agent for template")
         context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --agent enabled=1", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
 
         return imageExternalId
