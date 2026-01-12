@@ -737,7 +737,9 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	private runSshCmd(ComputeServer hvNode, String cmd) {
 		TaskResult result = context.executeSshCommand(hvNode.sshHost, 22, hvNode.sshUsername, hvNode.sshPassword, cmd, "", "", "", false, LogLevel.info, true, null, false).blockingGet()
 		if (!result.success) {
-			throw new Exception(result.toMap())
+			def errorMsg = "SSH FAILED on ${hvNode.sshHost}: ${cmd} | Exit Code: ${result.exitCode} | Output: ${result.output} | Error: ${result.error}"
+			log.error(errorMsg)
+			throw new Exception(errorMsg)
 		}
 	}
 
@@ -837,6 +839,10 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			
 			def checkFileCmd = "test -f $remoteImagePath && echo 'EXISTS' || echo 'NOT_EXISTS'"
 			def fileCheckResult = context.executeSshCommand(hvNode.sshHost, 22, hvNode.sshUsername, hvNode.sshPassword, checkFileCmd, "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+			if (!fileCheckResult.success) {
+				log.error("SSH FAILED on ${hvNode.sshHost}: file check | Exit Code: ${fileCheckResult.exitCode} | Output: ${fileCheckResult.output} | Error: ${fileCheckResult.error}")
+				throw new Exception("Failed to check if image exists on ${hvNode.sshHost}: ${fileCheckResult.error}")
+			}
 			boolean imageExistsOnNode = fileCheckResult.output?.contains('EXISTS')
 			
 			if (!imageExistsOnNode) {
@@ -1134,16 +1140,16 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				currentMemory = computeServer.maxMemory ?: computeServer.getConfigProperty('maxMemory')?.toLong()
 				currentCores = computeServer.maxCores ?: 1
 			}
-			def neededMemory = requestedMemory - currentMemory
-			def neededCores = (requestedCores ?: 1) - (currentCores ?: 1)
-			def allocationSpecs = [externalId: computeServer.externalId, maxMemory: requestedMemory, maxCpu: requestedCores]
-			if (neededMemory > 100000000l || neededMemory < -100000000l || neededCores != 0) {
-				log.debug("Resizing VM with specs: ${allocationSpecs}")
-				log.debug("Resizing vm: ${computeServer.name} with $computeServer.coresPerSocket cores and $computeServer.maxMemory memory")
-				
-				def resizeResult = ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, computeServer.volumes?.toList() ?: [], computeServer.interfaces?.toList() ?: [])
+		def neededMemory = requestedMemory - currentMemory
+		def neededCores = (requestedCores ?: 1) - (currentCores ?: 1)
+		def allocationSpecs = [externalId: computeServer.externalId, maxMemory: requestedMemory, maxCpu: requestedCores]
+		if (neededMemory > 100000000l || neededMemory < -100000000l || neededCores != 0) {
+			log.debug("Resizing VM with specs: ${allocationSpecs}")
+			log.debug("Resizing vm: ${computeServer.name} with $computeServer.coresPerSocket cores and $computeServer.maxMemory memory")
 
-				if (!resizeResult.success) {
+			def resizeResult = ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, computeServer.volumes?.toList() ?: [], computeServer.interfaces?.toList() ?: [])
+
+			if (!resizeResult.success) {
 					log.error("Resize API call failed: ${resizeResult.msg}")
 					computeServer.status = 'provisioned'
 					computeServer.statusMessage = "Resize failed: ${resizeResult.msg}"
