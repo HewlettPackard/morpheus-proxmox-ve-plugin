@@ -45,7 +45,12 @@ class ProxmoxSshUtil {
     public static String uploadImage(MorpheusContext context, ComputeServer hvNode, String imageFile) {
         log.info("Uploading image $imageFile to node $hvNode.name")
 
-        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "mkdir -p $REMOTE_IMAGE_DIR", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        TaskResult mkdirResult = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "mkdir -p $REMOTE_IMAGE_DIR", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        if (!mkdirResult.success) {
+            log.error("SSH FAILED on ${hvNode.sshHost}: mkdir -p $REMOTE_IMAGE_DIR | Exit Code: ${mkdirResult.exitCode} | Output: ${mkdirResult.output} | Error: ${mkdirResult.error}")
+            throw new Exception("Failed to create directory $REMOTE_IMAGE_DIR on ${hvNode.sshHost}: ${mkdirResult.error}")
+        }
+        
         ProxmoxMiscUtil.sftpUpload(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "$IMAGE_PATH_PREFIX/$imageFile", REMOTE_IMAGE_DIR, null)
 
         String fileName = new File("$imageFile").getName()
@@ -61,8 +66,12 @@ class ProxmoxSshUtil {
         ServiceResponse templateResp = ProxmoxApiComputeUtil.createImageTemplate(client, authConfig, virtualImage.name, hvNode.externalId, DEFAULT_TEMPLATE_CPUS, DEFAULT_TEMPLATE_MEMORY)
         def imageExternalId = templateResp.data.templateId
 
-        log.debug("Importing disk: qm importdisk $imageExternalId $remoteImagePath $targetDS")
         TaskResult importResult = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm importdisk $imageExternalId $remoteImagePath $targetDS", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        
+        if (!importResult.success) {
+            log.error("SSH FAILED on ${hvNode.sshHost}: qm importdisk | Exit Code: ${importResult.exitCode} | Output: ${importResult.output} | Error: ${importResult.error}")
+            throw new Exception("Failed to import disk for template $imageExternalId: ${importResult.error}")
+        }
         
         String diskId = null
         if (importResult.output) {
@@ -74,7 +83,7 @@ class ProxmoxSshUtil {
         }
         
         if (!diskId) {
-            log.info("Could not parse disk ID from import output, constructing based on image format")
+            log.debug("Could not parse disk ID from import output, constructing based on image format")
             String imageFileName = remoteImagePath.substring(remoteImagePath.lastIndexOf('/') + 1)
             
             // Check if image is raw or qcow2 format 
@@ -90,11 +99,16 @@ class ProxmoxSshUtil {
             }
         }
         
-        log.debug("Attaching imported disk to scsi0: ${diskId}")
-        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 ${diskId} --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
-
-        log.debug("Enabling QEMU guest agent for template")
-        context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --agent enabled=1", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        TaskResult attachResult = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --scsi0 ${diskId} --boot order=scsi0", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        if (!attachResult.success) {
+            log.error("SSH FAILED on ${hvNode.sshHost}: qm set --scsi0 | Exit Code: ${attachResult.exitCode} | Output: ${attachResult.output} | Error: ${attachResult.error}")
+            throw new Exception("Failed to attach disk to template $imageExternalId: ${attachResult.error}")
+        }
+        TaskResult agentResult = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "qm set $imageExternalId --agent enabled=1", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+        if (!agentResult.success) {
+            log.error("SSH FAILED on ${hvNode.sshHost}: qm set --agent | Exit Code: ${agentResult.exitCode} | Output: ${agentResult.output} | Error: ${agentResult.error}")
+            throw new Exception("Failed to enable guest agent for template $imageExternalId: ${agentResult.error}")
+        }
 
         return imageExternalId
     }
@@ -131,7 +145,7 @@ class ProxmoxSshUtil {
     private static runSshCmd(MorpheusContext context, ComputeServer hvNode, String cmd) {
         TaskResult result = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, cmd, "", "", "", false, LogLevel.info, true, null, false).blockingGet()
         if (!result.success) {
-            def errorMsg = "SSH command failed on ${hvNode.sshHost}: ${cmd}\nExit Code: ${result.exitCode}\nOutput: ${result.output}\nError: ${result.error}"
+            def errorMsg = "SSH FAILED on ${hvNode.sshHost}: ${cmd} | Exit Code: ${result.exitCode} | Output: ${result.output} | Error: ${result.error}"
             log.error(errorMsg)
             throw new Exception(errorMsg)
         }
