@@ -45,10 +45,10 @@ class ProxmoxMiscUtil {
             channelSftp.put(localPath, remoteFilePath)
             long endTime = System.currentTimeMillis()
             long duration = (endTime - startTime) / 1000
-            log.debug("File uploaded: $localPath to $remoteFilePath in $duration seconds")
 
         } catch (Exception e) {
-            e.printStackTrace()
+            log.error("SFTP FAILED: Error uploading file from $localPath to ${host}:${destDir} - ${e.message}", e)
+            throw new Exception("SFTP upload failed: ${e.message}", e)
         } finally {
             if (channelSftp != null) {
                 channelSftp.exit()
@@ -88,15 +88,15 @@ class ProxmoxMiscUtil {
 
             // Create and write to the file
             long startTime = System.currentTimeMillis();
+            log.debug("SFTP: Creating file ${destFilePath} on ${host} (${content.length()} bytes)")
             ByteArrayInputStream inputStream = new ByteArrayInputStream(content.getBytes("UTF-8"))
             channelSftp.put(inputStream, destFilePath)
             long endTime = System.currentTimeMillis()
             long duration = (endTime - startTime) / 1000
-            log.debug("File created: $destFilePath in $duration seconds")
 
         } catch (Exception e) {
-            //e.printStackTrace()
-            throw new Exception(e)
+            log.error("SFTP FAILED: Error creating file ${destFilePath} on ${host} - ${e.message}", e)
+            throw new Exception("SFTP file creation failed: ${e.message}", e)
         } finally {
             if (channelSftp != null) {
                 channelSftp.exit()
