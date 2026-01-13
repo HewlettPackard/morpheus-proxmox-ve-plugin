@@ -43,7 +43,7 @@ class ProxmoxSshUtil {
      * Upload image file to Proxmox node (does not create template)
      */
     public static String uploadImage(MorpheusContext context, ComputeServer hvNode, String imageFile) {
-        log.info("Uploading image $imageFile to node $hvNode.name")
+        log.debug("Uploading image $imageFile to node $hvNode.name")
 
         TaskResult mkdirResult = context.executeSshCommand(hvNode.sshHost, SSH_PORT, hvNode.sshUsername, hvNode.sshPassword, "mkdir -p $REMOTE_IMAGE_DIR", "", "", "", false, LogLevel.info, true, null, false).blockingGet()
         if (!mkdirResult.success) {
