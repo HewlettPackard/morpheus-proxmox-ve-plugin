@@ -95,13 +95,13 @@ class DatastoreSync {
                     refId          : cloud.id,
                     rawData        : cloudItem.nodes
                 ]
-                log.info("Adding datastore: $datastoreConfig")
+                log.debug("Adding datastore: $datastoreConfig")
                 Datastore add = new Datastore(datastoreConfig)
                 adds << add
             }
             if (adds.size() > 0) {
                 morpheusContext.async.cloud.datastore.bulkCreate(adds).blockingGet()
-                log.info("Added ${adds.size()} datastores to cloud ${cloud.name}")
+                log.debug("Added ${adds.size()} datastores to cloud ${cloud.name}")
             }
         } catch (e) {
             log.error "Error in addMissingDatastores: ${e}", e
@@ -153,7 +153,7 @@ class DatastoreSync {
     }
 
     private removeMissingDatastores(List<DatastoreIdentity> removeItems) {
-        log.info("Removing Datastores that no longer exist")
+        log.debug("Removing Datastores that no longer exist")
         morpheusContext.services.cloud.datastore.bulkRemove(removeItems)
     }
 }
