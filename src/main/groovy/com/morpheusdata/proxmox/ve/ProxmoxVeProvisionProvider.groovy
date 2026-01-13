@@ -511,7 +511,8 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			try {
 				imgDS = context.cloud.datastore.getDefaultImageDatastoreForAccount(server.cloud.id, server.cloud.account.id).blockingGet()
 			} catch(e) {
-				log.info("Unable to get Default Image Datastore. Error: ${e}")
+                log.info("Unable to get Default Image Datastore")
+				log.debug("Error: ${e}")
 				log.info("Getting general default datastore...")
 				imgDS = getDefaultDatastore(cloud.id)
 			}
