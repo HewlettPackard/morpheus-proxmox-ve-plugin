@@ -72,7 +72,7 @@ class PoolSync {
 
 
     private addMissingPools(Collection<Map> addList) {
-        log.info("PoolSync:addMissingPools: addList.size(): ${addList.size()}")
+        log.debug("PoolSync:addMissingPools: addList.size(): ${addList.size()}")
         def poolAdds = []
         try {
             addList?.each { cloudItem ->
@@ -91,7 +91,7 @@ class PoolSync {
                 ]
                 poolAdds << new CloudPool(saveConfig)
             }
-            log.info("Adding Pools: $poolAdds")
+            log.debug("Adding Pools: $poolAdds")
             morpheusContext.services.cloud.pool.bulkCreate(poolAdds)
         } catch (e) {
             log.error "Error adding Pool ${e}", e
