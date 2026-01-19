@@ -79,7 +79,7 @@ class VMSync {
 
 
     private void addMissingVirtualMachines(Cloud cloud, Collection items) {
-        log.info("Adding ${items.size()} new VMs for Proxmox cloud ${cloud.name}")
+        log.debug("Adding ${items.size()} new VMs for Proxmox cloud ${cloud.name}")
 
         def newVMs = []
 
@@ -133,7 +133,7 @@ class VMSync {
         
         if (newVMs) {
             context.async.computeServer.bulkCreate(newVMs).blockingGet()
-            log.info("Successfully added ${newVMs.size()} VMs")
+            log.debug("Successfully added ${newVMs.size()} VMs")
         }
     }
 
@@ -205,12 +205,12 @@ class VMSync {
                 new DataQuery().withFilter("id", "in", removeItems.collect { it.id })
                         .withFilter("computeServerType.code", UNMANAGED_SERVER_CODE)
         )
-        log.info("Removing ${removeUnmanagedItems.size()} VMs that no longer exist in Proxmox...")
+        log.debug("Removing ${removeUnmanagedItems.size()} VMs that no longer exist in Proxmox...")
         removeUnmanagedItems.each { vm ->
             log.debug("Removing orphaned VM: ${vm.name} (ID: ${vm.id}, External ID: ${vm.externalId}, Type: ${vm.computeServerTypeCode})")
             try {
                 context.services.computeServer.remove(vm)
-                log.info("Successfully removed VM: ${vm.name} (ID: ${vm.id})")
+                log.debug("Successfully removed VM: ${vm.name} (ID: ${vm.id})")
             } catch (e) {
                 log.error("Error removing VM ${vm.name} (ID: ${vm.id}): ${e}", e)
             }

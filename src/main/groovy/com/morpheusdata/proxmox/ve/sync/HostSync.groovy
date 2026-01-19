@@ -95,7 +95,7 @@ class HostSync {
 
         for (cloudItem in addList) {
             try {
-                log.info("Adding cloud host: $cloudItem with IP $cloudItem.ipAddress")
+                log.debug("Adding cloud host: $cloudItem with IP $cloudItem.ipAddress")
                 
                 // Handle null values with safe defaults for offline nodes
                 def maxCpu = cloudItem.maxcpu ?: 0
@@ -155,7 +155,7 @@ class HostSync {
 
 
     private updateMatchedHosts(Cloud cloud, List<SyncTask.UpdateItem<ComputeServer, Map>> updateItems) {
-        log.info("Updating ${updateItems.size()} Hosts...")
+        log.debug("Updating ${updateItems.size()} Hosts...")
         def updates = []
 
         try {

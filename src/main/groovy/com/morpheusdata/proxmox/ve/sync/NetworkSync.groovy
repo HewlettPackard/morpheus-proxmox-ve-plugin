@@ -83,7 +83,7 @@ class NetworkSync {
         def networks = []
         try {
             for(cloudItem in addList) {
-                log.info("Adding network: ${cloudItem.iface}")
+                log.debug("Adding network: ${cloudItem.iface}")
                 if (!['bridge','vlan','vnet'].contains(cloudItem?.type)) {
                     cloudItem.type = 'unknown'
                 }
@@ -160,7 +160,7 @@ class NetworkSync {
 
 
     private removeMissingNetworks(List<NetworkIdentityProjection> removeItems) {
-        log.info("Remove Networks...")
+        log.debug("Remove Networks...")
         morpheusContext.async.network.bulkRemove(removeItems).blockingGet()
     }
 }

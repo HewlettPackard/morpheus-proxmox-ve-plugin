@@ -59,7 +59,7 @@ class ProxmoxApiComputeUtil {
     static List<Map> getExistingVMInterfaces(HttpApiClient client, Map authConfig, String nodeId, String vmId) {
 
         def vmConfigInfo = callListApiV2(client, "nodes/$nodeId/qemu/$vmId/config", authConfig).data
-        log.info("VM Config Info: $vmConfigInfo")
+        log.debug("VM Config Info: $vmConfigInfo")
         def nicInterfaces = vmConfigInfo.findAll { k, v -> k ==~ /net\d+/ }.collect { k, v -> [ label: k, value: v] }
         return nicInterfaces
     }
@@ -328,7 +328,7 @@ class ProxmoxApiComputeUtil {
         }
         
         if (templateNode != nodeId) {
-            log.info("Template $templateId is on node $templateNode, but cloning to node $nodeId (cross-node clone)")
+            log.debug("Template $templateId is on node $templateNode, but cloning to node $nodeId (cross-node clone)")
         }
         
         try {
@@ -351,7 +351,7 @@ class ProxmoxApiComputeUtil {
                 if (templateNode == nodeId) {
                     // Same node clone - use specified storage
                     requestBody.storage = requestedStorage
-                    log.info("Same-node clone: using storage '$requestedStorage'")
+                    log.debug("Same-node clone: using storage '$requestedStorage'")
                 } else {
                     // Cross-node clone - only specify storage if it's shared storage
                     def sourceNodeStorages = getNodeStorages(client, authConfig, templateNode)
@@ -362,7 +362,7 @@ class ProxmoxApiComputeUtil {
                     
                     if (isSharedStorage) {
                         requestBody.storage = requestedStorage
-                        log.info("Cross-node clone: using shared storage '$requestedStorage'")
+                        log.debug("Cross-node clone: using shared storage '$requestedStorage'")
                     } else {
                         // Non-shared storage detected - omit storage parameter
                         // Proxmox will use default storage on target node
@@ -385,7 +385,7 @@ class ProxmoxApiComputeUtil {
                     ignoreSSL: true
             ]
 
-            log.info("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId")
+            log.debug("Cloning template $templateId from node $templateNode to VM $name($nextId) on node $nodeId")
             
             // Clone from the node where template actually resides
             def results = client.callJsonApi(
@@ -425,6 +425,7 @@ class ProxmoxApiComputeUtil {
             }
             
             if (resultData?.errors) {
+                log.error("Clone operation returned errors: ${resultData.errors}")
                 return ServiceResponse.error("Clone failed: ${resultData.errors}")
             }
 
@@ -462,7 +463,7 @@ class ProxmoxApiComputeUtil {
                 return ServiceResponse.error("Error Sizing VM Compute. Resize compute error: ${rtnResize.msg}")
             }
 
-            log.info("Successfully cloned and configured VM $nextId on node $nodeId")
+            log.debug("Successfully cloned and configured VM $nextId on node $nodeId")
         } catch(e) {
             log.error "Error Provisioning VM: ${e}", e
             return ServiceResponse.error("Error Provisioning VM: ${e}")
@@ -482,7 +483,7 @@ class ProxmoxApiComputeUtil {
             log.warn("VM/template $vmId not found on node $nodeId, searching other nodes in cluster...")
             String actualNode = findNodeForVM(client, authConfig, vmId)
             if (actualNode && actualNode != nodeId) {
-                log.info("Found VM/template $vmId on node $actualNode instead of $nodeId")
+                log.debug("Found VM/template $vmId on node $actualNode instead of $nodeId")
                 vmConfigInfo = callListApiV2(client, "nodes/$actualNode/qemu/$vmId/config", authConfig)
             }
         }
@@ -570,7 +571,7 @@ class ProxmoxApiComputeUtil {
                 }
                 
                 if (vmResource?.node) {
-                    log.info("VM/template $vmId found on node: ${vmResource.node}")
+                    log.debug("VM/template $vmId found on node: ${vmResource.node}")
                     return vmResource.node
                 }
             }
@@ -583,7 +584,7 @@ class ProxmoxApiComputeUtil {
                 try {
                     def vmConfig = callListApiV2(client, "nodes/$node/qemu/$vmId/config", authConfig)
                     if (vmConfig.success && vmConfig.data) {
-                        log.info("VM/template $vmId found on node $node via direct query")
+                        log.debug("VM/template $vmId found on node $node via direct query")
                         return node
                     }
                 } catch (Exception nodeEx) {
@@ -869,7 +870,7 @@ class ProxmoxApiComputeUtil {
                 if (!resultData.data.containsKey("lock")) {
                     return results
                 } else {
-                    log.info("VM Still Locked, wait ${API_CHECK_WAIT_INTERVAL}ms and check again...")
+                    log.debug("VM Still Locked, wait ${API_CHECK_WAIT_INTERVAL}ms and check again...")
                 }
                 sleep(API_CHECK_WAIT_INTERVAL)
                 duration += API_CHECK_WAIT_INTERVAL
@@ -933,7 +934,7 @@ class ProxmoxApiComputeUtil {
                 if (status == "stopped") {
                     def exitstatus = resultData?.data?.exitstatus
                     if (exitstatus == "OK") {
-                        log.info("Task $taskUPID completed successfully")
+                        log.debug("Task $taskUPID completed successfully")
                         return new ServiceResponse(success: true, data: resultData)
                     } else {
                         log.error("Task $taskUPID failed with exit status: $exitstatus")

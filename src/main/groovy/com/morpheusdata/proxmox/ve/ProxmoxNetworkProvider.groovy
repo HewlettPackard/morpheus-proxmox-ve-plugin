@@ -88,7 +88,7 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 
 	@Override
 	ServiceResponse initializeProvider(Cloud cloud) {
-		log.info("Initializeing network provider for ${cloud.name}")
+		log.debug("Initializeing network provider for ${cloud.name}")
 		ServiceResponse rtn = ServiceResponse.prepare()
 		try {
 			NetworkServer networkServer = new NetworkServer(
@@ -109,7 +109,7 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 
 	@Override
 	ServiceResponse deleteProvider(Cloud cloud) {
-		log.info("Deleting network provider for ${cloud.name}")
+		log.debug("Deleting network provider for ${cloud.name}")
 		ServiceResponse rtn = ServiceResponse.prepare()
 		try {
 			// cleanup is done by type, so we do not need to load the record
@@ -137,7 +137,7 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 	 */
 	@Override
 	ServiceResponse createNetwork(Network network, Map opts) {
-		log.info("NVR: CREATE NETWORK")
+		log.debug("NVR: CREATE NETWORK")
 		return ServiceResponse.success(network)
 	}
 
@@ -149,7 +149,7 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 	 */
 	@Override
 	ServiceResponse<Network> updateNetwork(Network network, Map opts) {
-		log.info("NVR: UPDATE NETWORK")
+		log.debug("NVR: UPDATE NETWORK")
 		return ServiceResponse.success(network)
 	}
 
@@ -160,25 +160,25 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 	 */
 	@Override
 	ServiceResponse deleteNetwork(Network network, Map opts) {
-		log.info("NVR: DELETE NETWORK")
+		log.debug("NVR: DELETE NETWORK")
 		return ServiceResponse.success()
 	}
 	
 	@Override
 	ServiceResponse createSubnet(NetworkSubnet subnet, Network network, Map opts) {
-		log.info("NVR: CREATE SUBNET")
+		log.debug("NVR: CREATE SUBNET")
 		return ServiceResponse.success()	
 	}
 	
 	@Override
 	ServiceResponse updateSubnet(NetworkSubnet subnet, Network network, Map opts) {
-		log.info("NVR: UPDATE SUBNET")
+		log.debug("NVR: UPDATE SUBNET")
 		return ServiceResponse.success()	
 	}
 	
 	@Override
 	ServiceResponse deleteSubnet(NetworkSubnet subnet, Network network, Map opts) {
-		log.info("NVR: DELETE SUBNET")
+		log.debug("NVR: DELETE SUBNET")
 		return ServiceResponse.success()
 	}
 	
@@ -187,18 +187,15 @@ class ProxmoxNetworkProvider implements NetworkProvider, CloudInitializationProv
 		return []
 	}
 
-
-
 	@Override
 	ServiceResponse<Network> prepareNetwork(Network network, Map opts) {
-		log.info("NVR: PREPARE NETWORK")
+		log.debug("NVR: PREPARE NETWORK")
 		return ServiceResponse.success(network);
 	}
 
-
 	@Override
 	ServiceResponse validateNetwork(Network network, Map opts) {
-		log.info("NVR: VALIDATE NETWORK")
+		log.debug("NVR: VALIDATE NETWORK")
 		return ServiceResponse.success();
 	}
 
