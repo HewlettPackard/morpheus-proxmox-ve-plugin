@@ -74,11 +74,12 @@ class ProxmoxSshUtil {
         }
         
         String diskId = null
-        if (importResult.output) {
-            def matcher = importResult.output =~ /unused\d+:(.+?)['"\s]/
+        if (importResult?.data) {
+            //def matcher = importResult.data =~ /unused\d+:(.+?)['"\s]/
+            def matcher = importResult.data =~ /imported disk ['"]([^'"]+)['"]/
             if (matcher.find()) {  
                 diskId = matcher.group(1)
-                log.debug("Detected imported disk identifier from output: ${diskId}")
+                log.info("Detected imported disk identifier from output: ${diskId}")
             }
         }
         
