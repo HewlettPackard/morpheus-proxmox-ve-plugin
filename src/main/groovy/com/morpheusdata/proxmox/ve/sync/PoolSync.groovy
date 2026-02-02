@@ -54,6 +54,11 @@ class PoolSync {
                     domainObject.externalId == cloudItem.poolid
                 }.onAdd { itemsToAdd ->
                     addMissingPools(itemsToAdd)
+                }.withLoadObjectDetails { List<SyncTask.UpdateItem<CloudPool, Map>> updateItems ->
+                    Map<Long, SyncTask.UpdateItemDto<CloudPoolIdentity, Map>> updateItemMap = updateItems.collectEntries { [(it.existingItem.id): it]}
+                    return morpheusContext.async.cloud.pool.listById(updateItems?.collect { it.existingItem.id }).map { CloudPool cloudPool ->
+                        return new SyncTask.UpdateItem<CloudPool, Map>(existingItem: cloudPool, masterItem: updateItemMap[cloudPool.id].masterItem)
+                    }
                 }.onUpdate { List<SyncTask.UpdateItem<CloudPool, Map>> updateItems ->
                     //nothing here...
                 }.onDelete { removeItems ->
@@ -67,7 +72,7 @@ class PoolSync {
 
 
     private addMissingPools(Collection<Map> addList) {
-        log.info("PoolSync:addMissingPools: addList.size(): ${addList.size()}")
+        log.debug("PoolSync:addMissingPools: addList.size(): ${addList.size()}")
         def poolAdds = []
         try {
             addList?.each { cloudItem ->
@@ -86,7 +91,7 @@ class PoolSync {
                 ]
                 poolAdds << new CloudPool(saveConfig)
             }
-            log.info("Adding Pools: $poolAdds")
+            log.debug("Adding Pools: $poolAdds")
             morpheusContext.services.cloud.pool.bulkCreate(poolAdds)
         } catch (e) {
             log.error "Error adding Pool ${e}", e

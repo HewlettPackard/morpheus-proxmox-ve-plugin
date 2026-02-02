@@ -95,7 +95,7 @@ class ProxmoxVeOptionSourceProvider extends AbstractOptionSourceProvider {
                 options << [name: it.virtualImage.name, value: it.virtualImage.id]
             }
                 locationExternalIds << it.externalId
-            log.info("External ID found: $it.externalId")
+            log.debug("External ID found: $it.externalId")
             //}
         }
 
@@ -114,7 +114,7 @@ class ProxmoxVeOptionSourceProvider extends AbstractOptionSourceProvider {
 
             morpheusContext.async.virtualImage.list(query).blockingSubscribe {
                 if (!(it.externalId in locationExternalIds)) {
-                    log.info("Uploaded External ID found: $it.externalId ($it.name)")
+                    log.debug("Uploaded External ID found: $it.externalId ($it.name)")
                     options << [name: "$it.name (To Be Uploaded)", value: it.id]
                 }
             }

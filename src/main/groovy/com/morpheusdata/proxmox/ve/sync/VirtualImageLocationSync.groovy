@@ -48,7 +48,7 @@ class VirtualImageLocationSync {
 
     def execute() {
         try {
-            log.info "Execute VirtualImageLocationSync STARTED: ${cloud.id}"
+            log.debug "Execute VirtualImageLocationSync STARTED: ${cloud.id}"
             def cloudItems = ProxmoxApiComputeUtil.listTemplates(apiClient, authConfig).data
             log.debug("Proxmox templates found: $cloudItems")
 
@@ -88,7 +88,7 @@ class VirtualImageLocationSync {
 
 
     private addMissingVirtualImageLocations(Collection<Map> objList) {
-        log.info "addMissingVirtualImageLocations: ${objList?.size()}"
+        log.debug "addMissingVirtualImageLocations: ${objList?.size()}"
 
         def names = objList.collect{it.name}?.unique()
         List<VirtualImageIdentityProjection> existingItems = []
@@ -107,9 +107,9 @@ class VirtualImageLocationSync {
                 )
         ]))
 
-        log.info("Virtual Image Identities:")
+        log.debug("Virtual Image Identities:")
         domainRecords.blockingIterable().each {
-            log.info("Virtual Image Identity: $it.name($it.externalId)")
+            log.debug("Virtual Image Identity: $it.name($it.externalId)")
         }
 
         SyncTask<VirtualImageIdentityProjection, Map, VirtualImage> syncTask = new SyncTask<>(domainRecords, objList)
@@ -135,7 +135,7 @@ class VirtualImageLocationSync {
 
 
     private addMissingVirtualImages(Collection<Map> addList) {
-        log.info "addMissingVirtualImages ${addList?.size()}"
+        log.debug "addMissingVirtualImages ${addList?.size()}"
 
         def adds = []
         addList.each {
@@ -146,7 +146,7 @@ class VirtualImageLocationSync {
             adds << virtImg
         }
 
-        log.info "About to create ${adds.size()} virtualImages"
+        log.debug "About to create ${adds.size()} virtualImages"
         context.async.virtualImage.create(adds, cloud).blockingGet()
     }
 
@@ -184,7 +184,7 @@ class VirtualImageLocationSync {
             def state = 'Active'
 
             def imageName = virtualImageConfig.name
-            log.info("Existing Name: $existingItem.imageName, New Name: $imageName")
+            log.debug("Existing Name: $existingItem.imageName, New Name: $imageName")
             if(existingItem.imageName != imageName) {
                 existingItem.imageName = imageName
 
@@ -290,21 +290,21 @@ class VirtualImageLocationSync {
     private removeMissingVirtualImageLocations(List<VirtualImageLocationIdentityProjection> removeList) {
         log.debug "removeMissingVirtualImageLocations: ${removeList?.size()}"
         def virtualImagesById = context.async.virtualImage.listById(removeList.collect { it.virtualImage.id }).toMap {it.id}.blockingGet()
-        log.info("VirtualImages: " + virtualImagesById.toString())
+        log.debug("VirtualImages: " + virtualImagesById.toString())
 
         def removeVirtualImages = []
 
         removeList.each { removeItem ->
-            log.info("VirtualImage ID is: $removeItem.virtualImage.id")
+            log.debug("VirtualImage ID is: $removeItem.virtualImage.id")
             def virtualImage = virtualImagesById[removeItem.virtualImage.id]
             if (virtualImage.imageLocations.size() == 1 && !virtualImage.systemImage) {
                 removeVirtualImages << virtualImage
             }
         }
-        log.info("Removing Locations: $removeList")
+        log.debug("Removing Locations: $removeList")
         context.async.virtualImage.location.bulkRemove(removeList).blockingGet()
         //removeVirtualImages.each {
-            log.info("Removing Virtual Images: $removeVirtualImages")
+            log.debug("Removing Virtual Images: $removeVirtualImages")
             context.async.virtualImage.bulkRemove(removeVirtualImages).blockingGet()
         //}
     }

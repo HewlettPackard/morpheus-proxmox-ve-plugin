@@ -1,3 +1,7 @@
 .idea/
 build/
 .gradle/
+
+# CodeNarc reports (generated during build)
+build/reports/codenarc/
+

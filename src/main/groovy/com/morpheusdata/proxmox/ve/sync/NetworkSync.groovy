@@ -1,6 +1,7 @@
 package com.morpheusdata.proxmox.ve.sync
 
 import com.morpheusdata.model.ComputeServer
+import com.morpheusdata.model.NetworkSubnet
 import com.morpheusdata.proxmox.ve.ProxmoxVePlugin
 import com.morpheusdata.proxmox.ve.util.ProxmoxApiComputeUtil
 import com.morpheusdata.core.MorpheusContext
@@ -39,11 +40,13 @@ class NetworkSync {
     def execute() {
         try {
 
-            log.debug "BEGIN: execute NetworkSync: ${cloud.id}"
+            log.debug "Execute NetworkSync STARTED: ${cloud.id}"
 
             def cloudItems = ProxmoxApiComputeUtil.listProxmoxNetworks(apiClient, authConfig, true)
             def domainRecords = morpheusContext.async.network.listIdentityProjections(
-                    new DataQuery().withFilter('typeCode', "proxmox.ve.bridge.$cloud.id")
+                    new DataQuery()
+                            .withFilter('refType', "ComputeZone")
+                            .withFilter('refId', cloud.id)
             )
 
             SyncTask<NetworkIdentityProjection, Map, Network> syncTask = new SyncTask<>(domainRecords, cloudItems.data)
@@ -80,19 +83,19 @@ class NetworkSync {
         def networks = []
         try {
             for(cloudItem in addList) {
-                log.debug("Adding Network: $cloudItem")
+                log.debug("Adding network: ${cloudItem.iface}")
                 if (!['bridge','vlan','vnet'].contains(cloudItem?.type)) {
                     cloudItem.type = 'unknown'
                 }
                 def networkType = networkTypes[cloudItem.type]
                 networks << new Network(
                         externalId   : cloudItem.iface,
+                        uniqueId     : cloudItem.iface,
                         name         : cloudItem.iface,
                         cloud        : cloud,
                         displayName  : cloudItem?.name ?: cloudItem.iface,
                         description  : cloudItem?.networkAddress,
                         cidr         : cloudItem?.networkAddress,
-                        status       : cloudItem?.active || 1,
                         code         : "proxmox.network.${cloudItem.iface}",
                         typeCode     : networkType.code,
                         type         : networkType,
@@ -103,12 +106,15 @@ class NetworkSync {
                         networkServer: cloud.networkServer,
                         providerId   : "",
                         gateway      : cloudItem?.gateway,
-                        dnsPrimary   : cloudItem?.gateway,
-                        dnsSecondary : "8.8.8.8",
+                        netmask      : cloudItem?.netmask,
+                        subnetAddress: cloudItem?.subnetAddress,
+                        dnsPrimary   : "",
+                        dnsSecondary : "",
                         dhcpServer   : true,
+                        active       : true
                 )
             }
-            log.debug("Saving ${networks.size()} Networks")
+            log.debug("Saving ${networks.size()} networks")
             if (!morpheusContext.async.network.bulkCreate(networks).blockingGet()){
                 log.error "Error saving new networks!"
             }
@@ -120,16 +126,23 @@ class NetworkSync {
 
 
     private updateMatchedNetworks(List<SyncTask.UpdateItem<Network, Map>> updateItems) {
-
         List itemsToUpdate = []
         for (def updateItem in updateItems) {
             def existingItem = updateItem.existingItem
             def cloudItem = updateItem.masterItem
-
             Map networkFieldValueMap = [
-                    name: cloudItem?.name ?: cloudItem.iface,
-                    cidr: cloudItem.networkAddress,
-                    description: cloudItem.networkAddress
+                    name         : cloudItem.iface,
+                    cloud        : cloud,
+                    displayName  : cloudItem?.name ?: cloudItem.iface,
+                    description  : cloudItem?.networkAddress,
+                    cidr         : cloudItem?.networkAddress,
+                    gateway      : cloudItem?.gateway,
+                    netmask      : cloudItem?.netmask,
+                    subnetAddress: cloudItem?.subnetAddress,
+                    dnsPrimary   : "",
+                    dnsSecondary : "",
+                    dhcpServer   : true,
+                    active       : true
             ]
 
             if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, networkFieldValueMap)) {
@@ -147,7 +160,7 @@ class NetworkSync {
 
 
     private removeMissingNetworks(List<NetworkIdentityProjection> removeItems) {
-        log.info("Remove Networks...")
+        log.debug("Remove Networks...")
         morpheusContext.async.network.bulkRemove(removeItems).blockingGet()
     }
 }

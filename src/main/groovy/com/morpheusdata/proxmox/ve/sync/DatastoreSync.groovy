@@ -61,7 +61,7 @@ class DatastoreSync {
             }.onUpdate { List<SyncTask.UpdateItem<Datastore, Map>> updateItems ->
                 updateMatchedDatastores(cloud, updateItems)
             }.onDelete { removeItems ->
-                removeMissingDatastores(cloud, removeItems)
+                removeMissingDatastores(removeItems)
             }.start()
 
         }
@@ -75,26 +75,33 @@ class DatastoreSync {
             def adds = []
             itemsToAdd?.each { cloudItem ->
                 log.debug("Adding datastore: $cloudItem")
+                // Only allow provisioning if datastore supports VM disk images
+                boolean supportsImages = cloudItem.content?.toLowerCase()?.contains("images") ?: false
+                if (!supportsImages) {
+                    log.info("Datastore '${cloudItem.storage}' does not support VM images (content: ${cloudItem.content}). Setting allowProvision to false.")
+                }
                 def datastoreConfig = [
-                    owner       : new Account(id: cloud.owner.id),
-                    name        : cloudItem.storage,
-                    externalId  : cloudItem.storage,
-                    cloud       : cloud,
-                    storageSize : cloudItem.total.toLong(),
-                    freeSpace   : cloudItem.avail.toLong(),
-                    category    : "proxmox-ve-datastore.${cloud.id}",
-                    drsEnabled  : false,
-                    online      : true,
-                    refType     : 'ComputeZone',
-                    refId       : cloud.id,
-                    rawData     : cloudItem.nodes
+                    owner          : new Account(id: cloud.owner.id),
+                    name           : cloudItem.storage,
+                    externalId     : cloudItem.storage,
+                    cloud          : cloud,
+                    storageSize    : cloudItem.total.toLong(),
+                    freeSpace      : cloudItem.avail.toLong(),
+                    category       : "proxmox-ve-datastore.${cloud.id}",
+                    drsEnabled     : false,
+                    online         : true,
+                    allowProvision : supportsImages,
+                    refType        : 'ComputeZone',
+                    refId          : cloud.id,
+                    rawData        : cloudItem.nodes
                 ]
-                log.warn("Adding datastore: $datastoreConfig")
+                log.debug("Adding datastore: $datastoreConfig")
                 Datastore add = new Datastore(datastoreConfig)
                 adds << add
             }
-            if (adds.size() > 1) {
+            if (adds.size() > 0) {
                 morpheusContext.async.cloud.datastore.bulkCreate(adds).blockingGet()
+                log.debug("Added ${adds.size()} datastores to cloud ${cloud.name}")
             }
         } catch (e) {
             log.error "Error in addMissingDatastores: ${e}", e
@@ -109,18 +116,24 @@ class DatastoreSync {
                 def existingItem = updateItem.existingItem
                 def cloudItem = updateItem.masterItem
 
+                    // Only allow provisioning if datastore supports VM disk images
+                    boolean supportsImages = cloudItem.content?.toLowerCase()?.contains("images") ?: false
+                    if (!supportsImages) {
+                        log.info("Datastore '${cloudItem.storage}' does not support VM images (content: ${cloudItem.content}). Setting allowProvision to false.")
+                    }
                     Map datastoreFieldValueMap = [
-                            owner      : new Account(id: cloud.owner.id),
-                            name       : cloudItem.storage,
-                            cloud      : cloud,
-                            storageSize: cloudItem.total.toLong(),
-                            freeSpace  : cloudItem.avail.toLong(),
-                            category   : "proxmox-ve-datastore.${cloud.id}",
-                            drsEnabled : false,
-                            online     : true,
-                            refType    : 'ComputeZone',
-                            refId      : cloud.id,
-                            rawData    : cloudItem.nodes
+                            owner          : new Account(id: cloud.owner.id),
+                            name           : cloudItem.storage,
+                            cloud          : cloud,
+                            storageSize    : cloudItem.total.toLong(),
+                            freeSpace      : cloudItem.avail.toLong(),
+                            category       : "proxmox-ve-datastore.${cloud.id}",
+                            drsEnabled     : false,
+                            online         : true,
+                            allowProvision : supportsImages,
+                            refType        : 'ComputeZone',
+                            refId          : cloud.id,
+                            rawData        : cloudItem.nodes
                     ]
 
                     if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, datastoreFieldValueMap)) {
@@ -139,9 +152,8 @@ class DatastoreSync {
         // Openstack - https://github.com/gomorpheus/morpheus-nutanix-prism-plugin/blob/master/src/main/groovy/com/morpheusdata/nutanix/prism/plugin/sync/DatastoresSync.groovy
     }
 
-
-    private removeMissingDatastores(List<Datastore> removeItems) {
-        log.debug("Remove Datastores $removeItems...")
-        morpheusContext.async.cloud.datastore.bulkRemove(removeItems).blockingGet()
+    private removeMissingDatastores(List<DatastoreIdentity> removeItems) {
+        log.debug("Removing Datastores that no longer exist")
+        morpheusContext.services.cloud.datastore.bulkRemove(removeItems)
     }
 }
