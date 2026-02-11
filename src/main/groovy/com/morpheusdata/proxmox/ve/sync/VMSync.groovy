@@ -2,6 +2,7 @@ package com.morpheusdata.proxmox.ve.sync
 
 
 import com.morpheusdata.core.MorpheusContext
+import com.morpheusdata.core.data.DataQuery
 import com.morpheusdata.core.providers.CloudProvider
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.core.util.SyncTask
@@ -30,7 +31,7 @@ class VMSync {
     private HttpApiClient apiClient
     private CloudProvider cloudProvider
     private Map authConfig
-
+    private static final String UNMANAGED_SERVER_CODE = 'proxmox-qemu-vm-unmanaged'
 
     VMSync(ProxmoxVePlugin proxmoxVePlugin, Cloud cloud, HttpApiClient apiClient, CloudProvider cloudProvider) {
         this.@plugin = proxmoxVePlugin
@@ -47,7 +48,6 @@ class VMSync {
         try {
             log.debug "Execute VMSync STARTED: ${cloud.id}"
             def cloudItems = ProxmoxApiComputeUtil.listVMs(apiClient, authConfig).data
-            
             // Sync BOTH managed and unmanaged VMs
             def domainRecords = context.async.computeServer.listIdentityProjections(cloud.id, null).filter {
                 it.computeServerTypeCode in ['proxmox-qemu-vm', 'proxmox-qemu-vm-unmanaged']
@@ -79,7 +79,7 @@ class VMSync {
 
 
     private void addMissingVirtualMachines(Cloud cloud, Collection items) {
-        log.info("Adding ${items.size()} new VMs for Proxmox cloud ${cloud.name}")
+        log.debug("Adding ${items.size()} new VMs for Proxmox cloud ${cloud.name}")
 
         def newVMs = []
 
@@ -97,7 +97,9 @@ class VMSync {
             if (!parentServer) {
                 log.warn("Could not find parent server for VM ${cloudItem.name} on node ${cloudItem.node}")
             }
-            
+            def usedCpu = cloudItem.cpu  ?: 0
+            def usedCpuPercent = usedCpu * 100
+
             def newVM = new ComputeServer(
                 account          : cloud.account,
                 externalId       : cloudItem.vmid.toString(),
@@ -117,6 +119,9 @@ class VMSync {
                 maxMemory        : cloudItem.maxmem,
                 maxCores         : cloudItem.maxCores,
                 coresPerSocket   : cloudItem.coresPerSocket,
+                usedStorage      : cloudItem.disk?.toLong(),
+                usedMemory       : cloudItem.mem?.toLong(),
+                usedCpu          : usedCpuPercent.toLong(),
                 parentServer     : parentServer,
                 osType           : 'unknown',
                 serverOs         : new OsType(code: 'unknown'),
@@ -128,14 +133,14 @@ class VMSync {
         
         if (newVMs) {
             context.async.computeServer.bulkCreate(newVMs).blockingGet()
-            log.info("Successfully added ${newVMs.size()} VMs")
+            log.debug("Successfully added ${newVMs.size()} VMs")
         }
     }
 
 
     private updateMatchingVMs(List<SyncTask.UpdateItem<ComputeServer, Map>> updateItems) {
         log.debug("Updating ${updateItems.size()} existing VMs")
-        
+
         def updates = []
         
         try {
@@ -145,7 +150,8 @@ class VMSync {
                 def needsUpdate = false
 
                 ComputeCapacityInfo capacityInfo = existingItem.getComputeCapacityInfo() ?: new ComputeCapacityInfo()
-
+                def usedCpu = cloudItem.cpu  ?: 0
+                def usedCpuPercent = usedCpu * 100
                 // Fix power state comparison
                 def cloudPowerState = (cloudItem.status == 'running') ? ComputeServer.PowerState.on : ComputeServer.PowerState.off
 
@@ -154,7 +160,11 @@ class VMSync {
                         externalIp : cloudItem.ip,
                         internalIp : cloudItem.ip,
                         maxCores   : cloudItem.maxCores ?: cloudItem.maxcpu?.toLong(),
+                        maxStorage : cloudItem.maxdisk?.toLong(),
+                        usedStorage: cloudItem.disk?.toLong(),
                         maxMemory  : cloudItem.maxmem?.toLong(),
+                        usedMemory : cloudItem.mem?.toLong(),
+                        usedCpu    : usedCpuPercent.toLong(),
                         powerState : cloudPowerState
                 ]
 
@@ -164,7 +174,7 @@ class VMSync {
                         usedStorage: cloudItem.disk?.toLong(),
                         maxMemory  : cloudItem.maxmem?.toLong(),
                         usedMemory : cloudItem.mem?.toLong(),
-                        usedCpu    : cloudItem.cpu?.toLong()
+                        usedCpu    : usedCpuPercent.toLong(),
                 ]
 
                 if (ProxmoxMiscUtil.doUpdateDomainEntity(existingItem, serverFieldValueMap)) {
@@ -191,18 +201,18 @@ class VMSync {
 
 
     private removeMissingVMs(List<ComputeServerIdentityProjection> removeItems) {
-        log.info("Removing ${removeItems.size()} VMs that no longer exist in Proxmox...")
-        
-        removeItems.each { vm ->
-            log.info("Removing orphaned VM: ${vm.name} (ID: ${vm.id}, External ID: ${vm.externalId}, Type: ${vm.computeServerTypeCode})")
-        }
-        
-        if (removeItems) {
+        def removeUnmanagedItems = context.services.computeServer.listIdentityProjections(
+                new DataQuery().withFilter("id", "in", removeItems.collect { it.id })
+                        .withFilter("computeServerType.code", UNMANAGED_SERVER_CODE)
+        )
+        log.debug("Removing ${removeUnmanagedItems.size()} VMs that no longer exist in Proxmox...")
+        removeUnmanagedItems.each { vm ->
+            log.debug("Removing orphaned VM: ${vm.name} (ID: ${vm.id}, External ID: ${vm.externalId}, Type: ${vm.computeServerTypeCode})")
             try {
-                def result = context.async.computeServer.bulkRemove(removeItems).blockingGet()
-                log.info("Bulk remove completed successfully")
+                context.services.computeServer.remove(vm)
+                log.debug("Successfully removed VM: ${vm.name} (ID: ${vm.id})")
             } catch (e) {
-                log.error("Error removing VMs: ${e}", e)
+                log.error("Error removing VM ${vm.name} (ID: ${vm.id}): ${e}", e)
             }
         }
     }

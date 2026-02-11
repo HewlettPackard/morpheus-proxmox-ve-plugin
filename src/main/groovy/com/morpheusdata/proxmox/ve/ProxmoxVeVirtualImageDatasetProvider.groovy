@@ -107,7 +107,7 @@ class ProxmoxVeVirtualImageDatasetProvider extends AbstractDatasetProvider<Virtu
             Long cloudId = datasetQuery.get("zoneId")?.toLong()
             Cloud tmpZone = cloudId ? morpheus.services.cloud.get(cloudId) : null
             List<String> supportedImageTypes = getImageTypes()
-            log.info("query parameters: ${datasetQuery.parameters}")
+            log.debug("query parameters: ${datasetQuery.parameters}")
             /*DataQuery query  = new DatasetQuery().withFilters(
                     new DataOrFilter(
                             new DataFilter("visibility", "public"),

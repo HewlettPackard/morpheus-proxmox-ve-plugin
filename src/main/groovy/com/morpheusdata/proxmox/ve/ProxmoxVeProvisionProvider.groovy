@@ -52,6 +52,15 @@ import groovy.util.logging.Slf4j
 class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements VmProvisionProvider, WorkloadProvisionProvider, WorkloadProvisionProvider.ResizeFacet, HostProvisionProvider.ResizeFacet { //, ProvisionProvider.BlockDeviceNameFacet {
 	public static final String PROVISION_PROVIDER_CODE = 'proxmox-provision-provider'
 
+    // Validation error messages
+    private static final String VALIDATION_MSG_NO_NODE = 'Please select a ProxMox node'
+    private static final String VALIDATION_MSG_NO_IMAGE = 'Please select a virtual image'
+    private static final String VALIDATION_MSG_NO_NETWORK = 'Please select a network'
+    private static final String VALIDATION_MSG_INACTIVE_NODE = 'This ProxMox node is currently inactive. Please select an active node'
+    private static final String VALIDATION_MSG_IMAGE_DATASTORE_NOT_ATTACHED = "Invalid instance config: Selected Virtual Image '%s' disk datastore '%s' is not attached to selected node '%s'."
+    private static final String VALIDATION_MSG_DATASTORE_NOT_ATTACHED = "Invalid instance config: Selected datastore '%s' is not attached to selected node '%s'."
+    private static final String VALIDATION_MSG_NETWORK_NOT_ATTACHED = "Invalid instance config: Selected network '%s' is not attached to selected node '%s'."
+
 	protected MorpheusContext context
 	protected ProxmoxVePlugin plugin
 
@@ -132,8 +141,10 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	 */
 	@Override
 	Icon getCircularIcon() {
-		// TODO: change icon paths to correct filenames once added to your project
-		return new Icon(path:'provision-circular.svg', darkPath:'provision-circular-dark.svg')
+		return new Icon(
+			path: Assets.PROXMOX_LOGO_STACKED.path,
+			darkPath: Assets.PROXMOX_LOGO_STACKED_INVERTED.path
+		)
 	}
 
 	/**
@@ -303,92 +314,141 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	 */
 	@Override
 	ServiceResponse validateWorkload(Map opts) {
-		log.debug("VALIDATION OPTS: $opts")
-		def rtn =  new ServiceResponse(true, null, [:], null)
+        log.debug("VALIDATION OPTS: $opts")
 
-		HttpApiClient client = new HttpApiClient()
+		def rtn = ServiceResponse.success()
+
+        // Node, image and network fields are required
+        def basicValidation = validateProvisioningOptions(opts)
+        if(!basicValidation.success) {
+            rtn.success = false
+            rtn.errors = basicValidation.errors
+            return rtn
+        }
+
+        HttpApiClient client = new HttpApiClient()
 		Cloud cloud = context.async.cloud.get(opts.zoneId?.toLong()).blockingGet()
 		ComputeServer selectedNode = getHypervisorHostByExternalId(cloud.id, opts.config.proxmoxNode)
-		if(selectedNode && selectedNode.powerState != ComputeServer.PowerState.on) {
+
+        if(selectedNode && selectedNode.powerState != ComputeServer.PowerState.on) {
 			rtn.success = false
-			rtn.errors = [field: 'proxmoxNode', msg: 'This Proxmox node is currently inactive. Please select an active node.']
+			rtn.addError("proxmoxNode", VALIDATION_MSG_INACTIVE_NODE)
 			return rtn
 		}
-		Map authConfig = plugin.getAuthConfig(cloud)
 
-		List<Map> wizardInterfaces = opts.networkInterfaces
-		List<Map> instanceDisks = opts.volumes
-		Long imageId = opts.config.imageId as Long
-		Map proxmoxNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, opts.config.proxmoxNode).data
+        Map authConfig = plugin.getAuthConfig(cloud)
 
-		//get proxmox datastores from API using morpheus datastore IDs from wizard
-		List<String> wizardDatastoreExternalIds = []
-		opts.volumes.each {
-			if (it.datastoreId != "auto") {
-				wizardDatastoreExternalIds << context.async.cloud.datastore.listById([it.datastoreId as Long]).blockingFirst().externalId
-			}
-		}
-		List<Map> wizardDatastores = ProxmoxApiComputeUtil.getProxmoxDatastoresById(client, authConfig, wizardDatastoreExternalIds).data
+        List<Map> wizardInterfaces = opts.networkInterfaces
+        List<Map> instanceDisks = opts.volumes
+        Long imageId = opts.config.imageId as Long
+        Map proxmoxNode = ProxmoxApiComputeUtil.getProxmoxHypervisorHostByName(client, authConfig, opts.config.proxmoxNode).data
 
-		//get virtualImage Datastores
-		def virtualImage = context.async.virtualImage.listById([imageId]).blockingFirst()
-		def virtualImageExternalId = virtualImage.externalId as Long
-		def proxmoxTemplate = ProxmoxApiComputeUtil.getTemplateById(client, authConfig, virtualImageExternalId).data
+        //get proxmox datastores from API using morpheus datastore IDs from wizard
+        List<String> wizardDatastoreExternalIds = []
+        opts.volumes.each {
+            if (it.datastoreId != "auto") {
+                wizardDatastoreExternalIds << context.async.cloud.datastore.listById([it.datastoreId as Long]).blockingFirst().externalId
+            }
+        }
+        List<Map> wizardDatastores = ProxmoxApiComputeUtil.getProxmoxDatastoresById(client, authConfig, wizardDatastoreExternalIds).data
 
-		log.debug("PROXMOX TEMPLATE IS: $proxmoxTemplate")
-		log.debug("SELECTED DATASTORES: $wizardDatastores")
-		log.debug("SELECTED NODE DATASTORES: ${proxmoxNode.datastores}")
-		log.debug("SELECTED NETWORKS: $wizardInterfaces")
-		log.debug("SELECTED NODE NETWORKS: ${proxmoxNode.networks}")
+        //get virtualImage Datastores
+        def virtualImage = context.async.virtualImage.listById([imageId]).blockingFirst()
+        def virtualImageExternalId = virtualImage.externalId as Long
+        def proxmoxTemplate = ProxmoxApiComputeUtil.getTemplateById(client, authConfig, virtualImageExternalId).data
 
-		//ensure that we aren't uploading the template for the first time
-		if (proxmoxTemplate) {
-			log.debug("SELECTED TEMPLATE DATASTORES: ${proxmoxTemplate.datastores}")
+        log.debug("PROXMOX TEMPLATE IS: $proxmoxTemplate")
+        log.debug("SELECTED DATASTORES: $wizardDatastores")
+        log.debug("SELECTED NODE DATASTORES: ${proxmoxNode.datastores}")
+        log.debug("SELECTED NETWORKS: $wizardInterfaces")
+        log.debug("SELECTED NODE NETWORKS: ${proxmoxNode.networks}")
 
+        //ensure that we aren't uploading the template for the first time
+        if (proxmoxTemplate) {
+            log.debug("SELECTED TEMPLATE DATASTORES: ${proxmoxTemplate.datastores}")
 
-			//Check that the node can see see the template disk to copy it
-			proxmoxTemplate.datastores.each { String templateDS ->
-				if (!proxmoxNode.datastores.contains(templateDS)) {
-					log.error("Error provisioning: Selected template (virtual image) '${virtualImage.name}' disk datastore '$templateDS' is not attached to selected node '${opts.config.proxmoxNode}'.")
-					rtn.errors += [field: "imageId", msg: "Invalid instance config: Selected Virtual Image '${virtualImage.name}' disk datastore '$templateDS' is not attached to selected node '${opts.config.proxmoxNode}'."]
-				} else {
-					log.info("Datastore '$templateDS' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
-				}
-			}
-		}
+            //Check that the node can see see the template disk to copy it
+            proxmoxTemplate.datastores.each { String templateDS ->
+                if (!proxmoxNode.datastores.contains(templateDS)) {
+                    log.error("Error provisioning: Selected Virtual Image '${virtualImage.name}' disk datastore '$templateDS' is not attached to selected node '${opts.config.proxmoxNode}'.")
+                    def errorMsg = String.format(VALIDATION_MSG_IMAGE_DATASTORE_NOT_ATTACHED, virtualImage.name, templateDS, opts.config.proxmoxNode)
+                    rtn.addError("imageId", errorMsg)
+                } else {
+                    log.debug("Datastore '$templateDS' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
+                }
+            }
 
-		//check that each disk datastore is present on the node
-		wizardDatastores.each { Map wizardDS ->
-			if (!proxmoxNode.datastores.contains(wizardDS.storage)) {
-				log.error("Error provisioning: Selected datastore '$wizardDS.storage' is not attached to selected node '${opts.config.proxmoxNode}'.")
-				rtn.errors += [field: "volumes", msg: "Selected datastore '$wizardDS.storage' is not attached to selected node '${opts.config.proxmoxNode}'."]
-			} else {
-				log.info("Datastore '$wizardDS.storage' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
-			}
-		}
+            if (rtn.errors && rtn.errors.size() > 0) {
+                rtn.success = false
+                return rtn
+            }
+        }
 
-		//check that selected networks are attached to host
-		wizardInterfaces.each { Map wizardNetwork ->
-			if (!proxmoxNode.networks.contains(wizardNetwork.network.name)) {
-				log.error("Error provisioning: Selected network '${wizardNetwork.network.name}' is not attached to selected node '${opts.config.proxmoxNode}'.")
-				rtn.errors += [field: "networks", msg: "Selected network '${wizardNetwork.network.name}' is not attached to selected node '${opts.config.proxmoxNode}'."]
-			} else {
-				log.info("Datastore '$wizardNetwork.network.name' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
-			}
-		}
+        //check that each disk datastore is present on the node
+        wizardDatastores.each { Map wizardDS ->
+            if (!proxmoxNode.datastores.contains(wizardDS.storage)) {
+                log.error("Error provisioning: Selected datastore '$wizardDS.storage' is not attached to selected node '${opts.config.proxmoxNode}'.")
+                def errorMsg = String.format(VALIDATION_MSG_DATASTORE_NOT_ATTACHED, wizardDS.storage, opts.config.proxmoxNode)
+                rtn.addError("volume", errorMsg)
+            } else {
+                log.debug("Datastore '$wizardDS.storage' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
+            }
 
-		if (rtn.errors) {
-			rtn.success = false
-		}
+            if (rtn.errors && rtn.errors.size() > 0) {
+                rtn.success = false
+                return rtn
+            }
+        }
 
+        //check that selected networks are attached to host
+        wizardInterfaces.each { Map wizardNetwork ->
+            if (!proxmoxNode.networks.contains(wizardNetwork.network.name)) {
+                log.error("Error provisioning: Selected network '${wizardNetwork.network.name}' is not attached to selected node '${opts.config.proxmoxNode}'.")
+                def errorMsg = String.format(VALIDATION_MSG_NETWORK_NOT_ATTACHED, wizardNetwork.network.name, opts.config.proxmoxNode)
+                rtn.addError("networkInterface", errorMsg)
+            } else {
+                log.debug("Network '$wizardNetwork.network.name' is present and valid on proxmox node '${opts.config.proxmoxNode}'.")
+            }
+        }
 
-		//rtn.errors += [field: "networkInterface", msg: "Network not available on node"]
-		//"Testing provisioning halt.",
-		//["network": "Network not available on node", "storage": "Storage not availalbe on node"],
-		//"Test data"
-		//)
-		return rtn
+        if (rtn.errors && rtn.errors.size() > 0) {
+            rtn.success = false
+        }
+
+        return rtn
 	}
+
+    private ServiceResponse validateProvisioningOptions(Map opts) {
+        def rtn = ServiceResponse.success()
+
+        if (!opts.config.proxmoxNode) {
+            rtn.addError("proxmoxNode", VALIDATION_MSG_NO_NODE)
+        }
+
+        if (!opts.config.imageId) {
+            rtn.addError("imageId", VALIDATION_MSG_NO_IMAGE)
+        }
+
+        if (opts.networkInterfaces?.size() > 0) {
+            def hasNetwork = true
+            opts.networkInterfaces?.each {
+                if (!it.network.group && it.network.id == null) {
+                    hasNetwork = false
+                }
+            }
+            if (!hasNetwork) {
+                rtn.addError("networkInterface", VALIDATION_MSG_NO_NETWORK)
+            }
+        } else {
+            rtn.addError("networkInterface", VALIDATION_MSG_NO_NETWORK)
+        }
+
+        if (rtn.errors?.size() > 0) {
+            rtn.success = false
+        }
+
+        return rtn
+    }
 
 	/**
 	 * This method is a key entry point in provisioning a workload. This could be a vm, a container, or something else.
@@ -451,13 +511,14 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			try {
 				imgDS = context.cloud.datastore.getDefaultImageDatastoreForAccount(server.cloud.id, server.cloud.account.id).blockingGet()
 			} catch(e) {
-				log.info("Unable to get Default Image Datastore. Error: ${e}")
-				log.info("Getting general default datastore...")
+                log.debug("Unable to get Default Image Datastore")
+				log.debug("Error: ${e}")
+				log.debug("Getting general default datastore...")
 				imgDS = getDefaultDatastore(cloud.id)
 			}
 
-			log.info("IMAGE Datastore: $imgDS.name")
-			String imageExternalId = getOrUploadImage(client, authConfig, cloud, virtualImage, hvNode, imgDS.name)
+			log.debug("IMAGE Datastore: $imgDS.name")
+			String imageExternalId = ensureTemplateAvailable(client, authConfig, cloud, virtualImage, hvNode, imgDS.name)
 			if (!imageExternalId) {
 				return new ServiceResponse<ProvisionResponse>(
 						false,
@@ -512,31 +573,44 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			server.cloud = cloud
 			server = saveAndGet(server)
 
-			log.info("Provisioning/cloning: ${workload.getInstance().name} from Image Id: $imageExternalId on node: $nodeId")
-			log.info("Provisioning/cloning: ${workload.getInstance().name} with $server.coresPerSocket cores and $server.maxMemory memory")
-
-
+			log.debug("Provisioning/cloning: ${workload.getInstance().name} from Image Id: $imageExternalId on node: $nodeId")
+			log.debug("Provisioning/cloning: ${workload.getInstance().name} with $server.coresPerSocket cores and $server.maxMemory memory")
 			ServiceResponse rtnClone = ProxmoxApiComputeUtil.cloneTemplate(client, authConfig, imageExternalId, workload.getInstance().name, nodeId, server)
 
-			log.debug("VM Clone done. Results: $rtnClone")
+			if (!rtnClone.success) {
+				def errorMessage = rtnClone.error ?: rtnClone.msg ?: 'Provisioning failed'
+				log.error("Provisioning failed: ${errorMessage}")
+				
+				// Set the error message on the server for display in UI
+				server.statusMessage = errorMessage
+				server.status = 'failed'
+				saveAndGet(server)
+				
+				return new ServiceResponse<ProvisionResponse>(
+						false,
+						errorMessage,
+						[(server.id.toString()): errorMessage], // Pass error as map for UI display
+						new ProvisionResponse(success: false)
+				)
+			}
 
 			server.internalId = rtnClone.data.vmId
 			server.externalId = rtnClone.data.vmId
 			server = saveAndGet(server)
 
-			if (!rtnClone.success) {
-				log.error("Provisioning/clone failed: $rtnClone.msg")
-				return ServiceResponse.error("Provisioning failed: $rtnClone.msg")
-			}
-
 			def installAgentAfter = false
-			//log.debug("OPTS: $opts")
 			if(virtualImage?.isCloudInit() && workloadRequest?.cloudConfigUser) {
-				log.debug(log.debug("Configuring Cloud-Init"))
-				def rootVol = server.volumes.find {it.rootVolume }
-				ProxmoxSshUtil.createCloudInitDrive(context, hvNode, workloadRequest, rtnClone.data.vmId, rootVol.datastore.externalId)
+				log.debug("Configuring Cloud-Init")
+				// Get the actual storage used by the VM (important for cross-node clones)
+				String actualStorage = ProxmoxApiComputeUtil.getVMActualStorage(client, authConfig, nodeId, rtnClone.data.vmId)
+				if (!actualStorage) {
+					log.warn("Could not determine actual storage for VM, falling back to requested storage")
+					actualStorage = server.volumes.find {it.rootVolume }?.datastore?.externalId
+				}
+				log.debug("Using storage '$actualStorage' for Cloud-Init drive")
+				ProxmoxSshUtil.createCloudInitDrive(context, hvNode, workloadRequest, rtnClone.data.vmId, actualStorage)
 			} else {
-				log.info("Non Cloud-Init deployment...")
+				log.debug("Non Cloud-Init deployment...")
 			}
 
 			ProxmoxApiComputeUtil.startVM(client, authConfig, nodeId, rtnClone.data.vmId)
@@ -662,7 +736,9 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	private runSshCmd(ComputeServer hvNode, String cmd) {
 		TaskResult result = context.executeSshCommand(hvNode.sshHost, 22, hvNode.sshUsername, hvNode.sshPassword, cmd, "", "", "", false, LogLevel.info, true, null, false).blockingGet()
 		if (!result.success) {
-			throw new Exception(result.toMap())
+			def errorMsg = "SSH FAILED on ${hvNode.sshHost}: ${cmd} | Exit Code: ${result.exitCode} | Output: ${result.output} | Error: ${result.error}"
+			log.error(errorMsg)
+			throw new Exception(errorMsg)
 		}
 	}
 
@@ -691,7 +767,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 
 
 	private ComputeServer getHypervisorHostByExternalId(Long cloudId, String externalId) {
-		log.info("Fetch Hypervisor Host by Cloud/External Id: $cloudId/$externalId")
+		log.debug("Fetch Hypervisor Host by Cloud/External Id: $cloudId/$externalId")
 
 		ComputeServer hvNode
 		def hostIdentityProjection = context.async.computeServer.listIdentityProjections(cloudId, null).filter {
@@ -701,7 +777,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				}
 				false
 		}.subscribe {
-			log.info("Found Host IdentityProjection: $it.id")
+			log.debug("Found Host IdentityProjection: $it.id")
 			List<Long> idList = [it.id]
 			hvNode = context.async.computeServer.listById(idList).blockingFirst()
 			log.debug("Returning hvHost: $hvNode.sshHost")
@@ -712,65 +788,91 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 
 
 
-	private getOrUploadImage(HttpApiClient client, Map authConfig, Cloud cloud, VirtualImage virtualImage, ComputeServer hvNode, String targetDS) {
+	/**
+	 * Ensure template is available on the target node
+	 * Handles three scenarios:
+	 * 1. New image + new host: upload image, create template, then clone
+	 * 2. Old image + new host: create template on new host, then clone
+	 * 3. Old image + old host: directly clone template
+	 */
+	private ensureTemplateAvailable(HttpApiClient client, Map authConfig, Cloud cloud, VirtualImage virtualImage, ComputeServer hvNode, String targetDS) {
 		def imageExternalId
 		def lock
-		def lockKey = "proxmox.ve.imageupload.${cloud.regionCode}.${virtualImage?.id}".toString()
+		def lockKey = "proxmox.ve.imageupload.${cloud.regionCode}.${virtualImage?.id}.${hvNode.externalId}".toString()
 
 		try {
-			//hold up to a 1 hour lock for image upload
-			lock = context.acquireLock(lockKey, [timeout: 2l * 60l * 1000l, ttl: 2l * 60l * 1000l]).blockingGet()
-			if (virtualImage) {
-				log.debug("VIRTUAL IMAGE: Already Exists")
-				VirtualImageLocation virtualImageLocation
-				try {
-					log.debug("searching for virtualImageLocation: $virtualImage.id")
-					virtualImageLocation = context.async.virtualImage.location.find(new DataQuery().withFilters([
-							new DataFilter("refType", "ComputeZone"),
-							new DataFilter("refId", cloud.id),
-							new DataFilter("externalId", virtualImage.externalId)
-					])).blockingGet()
-					log.debug("Got VirtualImageLocation ($cloud.id, $virtualImage.externalId): $virtualImageLocation")
-
-					if (!virtualImageLocation) {
-						log.debug("VIRTUAL IMAGE: VirtualImageLocation doesn't exist")
-						imageExternalId = null
-					} else {
-						log.debug("VIRTUAL IMAGE: VirtualImageLocation already exists")
-						imageExternalId = virtualImageLocation.externalId
-					}
-				} catch (e) {
-					log.error "Error in findVirtualImageLocation.. could be not found ${e}", e
+			lock = context.acquireLock(lockKey, [timeout: 60l * 60l * 1000l, ttl: 60l * 60l * 1000l]).blockingGet()
+			
+			VirtualImageLocation existingLocation = null
+			if (virtualImage?.externalId) {
+				log.debug("Checking for existing template: $virtualImage.externalId on node: $hvNode.externalId")
+				
+				String templateNodeName = ProxmoxApiComputeUtil.findNodeForVM(client, authConfig, virtualImage.externalId)
+				if (templateNodeName == hvNode.externalId) {
+					// Scenario 3: Template already exists on target node
+					log.debug("Template ${virtualImage.externalId} already exists on target node ${hvNode.externalId} - using existing template")
+					return virtualImage.externalId
+				} else if (templateNodeName) {
+					log.debug("Template ${virtualImage.externalId} exists on node ${templateNodeName}, but not on target node ${hvNode.externalId}")
+					log.debug("Will use cross-node cloning from ${templateNodeName} to ${hvNode.externalId}")
+					return virtualImage.externalId
 				}
 			}
-
-			if (!imageExternalId) { //If its userUploaded to the Morpheus appliance and still needs to be uploaded to cloud
-				// Create the image
-				def cloudFiles = context.async.virtualImage.getVirtualImageFiles(virtualImage).blockingGet()
-				log.debug("CloudFiles: $cloudFiles")
-				String imageFile = cloudFiles?.find { cloudFile ->
-					cloudFile.name.toLowerCase().endsWith(".qcow2") ||
-							cloudFile.name.toLowerCase().endsWith(".img") ||
-							cloudFile.name.toLowerCase().endsWith(".raw")
-				}
-				log.debug("ImageFile: $imageFile")
-				imageExternalId = ProxmoxSshUtil.uploadImageAndCreateTemplate(context, client, authConfig, cloud, virtualImage, hvNode, targetDS, imageFile)
-
+			
+			def cloudFiles = context.async.virtualImage.getVirtualImageFiles(virtualImage).blockingGet()
+			String imageFile = cloudFiles?.find { cloudFile ->
+				cloudFile.name.toLowerCase().endsWith(".qcow2") ||
+					cloudFile.name.toLowerCase().endsWith(".img") ||
+					cloudFile.name.toLowerCase().endsWith(".raw")
+			}
+			
+			if (!imageFile) {
+				// No image file in Morpheus - this is a synced template from Proxmox
+				log.warn("No image file found in Morpheus storage for ${virtualImage.name}. This appears to be a synced Proxmox template.")
+				log.warn("Template should exist on Proxmox cluster. If not found, please upload the image to Morpheus or create template on Proxmox manually.")
+				throw new Exception("No valid image file found for virtual image ${virtualImage.name}. Please upload the image file to Morpheus.")
+			}
+			
+			String fileName = new File(imageFile).getName()
+			String remoteImagePath = "${ProxmoxSshUtil.REMOTE_IMAGE_DIR}/$fileName"
+			
+			def checkFileCmd = "test -f $remoteImagePath && echo 'EXISTS' || echo 'NOT_EXISTS'"
+			def fileCheckResult = context.executeSshCommand(hvNode.sshHost, 22, hvNode.sshUsername, hvNode.sshPassword, checkFileCmd, "", "", "", false, LogLevel.info, true, null, false).blockingGet()
+			if (!fileCheckResult.success) {
+				log.error("SSH FAILED on ${hvNode.sshHost}: file check | Exit Code: ${fileCheckResult.exitCode} | Output: ${fileCheckResult.output} | Error: ${fileCheckResult.error}")
+				throw new Exception("Failed to check if image exists on ${hvNode.sshHost}: ${fileCheckResult.error}")
+			}
+			boolean imageExistsOnNode = fileCheckResult.output?.contains('EXISTS')
+			
+			if (!imageExistsOnNode) {
+				// Scenario 1: New image on new host - upload image and create template
+				log.debug("Uploading image and creating template")
+				remoteImagePath = ProxmoxSshUtil.uploadImage(context, hvNode, imageFile)
+				imageExternalId = ProxmoxSshUtil.createTemplateFromImage(context, client, authConfig, virtualImage, hvNode, targetDS, remoteImagePath)
+			} else {
+				// Scenario 2: Old image on new host - create template from existing image file
+				log.debug("Creating template from existing image file")
+				imageExternalId = ProxmoxSshUtil.createTemplateFromImage(context, client, authConfig, virtualImage, hvNode, targetDS, remoteImagePath)
+			}
+			
+			if (!virtualImage.externalId) {
 				virtualImage.externalId = imageExternalId
-				log.debug("Updating virtual image $virtualImage.name with external ID $virtualImage.externalId")
+				log.debug("Updating virtual image $virtualImage.name with external ID $imageExternalId")
 				context.async.virtualImage.bulkSave([virtualImage]).blockingGet()
-				VirtualImageLocation virtualImageLocation = new VirtualImageLocation([
-						virtualImage: virtualImage,
-						externalId  : imageExternalId,
-						imageRegion : cloud.regionCode,
-						code        : "proxmox.ve.image.${cloud.id}.$imageExternalId",
-						internalId  : imageExternalId,
-						refId		: cloud.id,
-						refType		: 'ComputeZone',
-				])
-				context.async.virtualImage.location.create([virtualImageLocation], cloud).blockingGet()
-
 			}
+			
+			VirtualImageLocation virtualImageLocation = new VirtualImageLocation([
+				virtualImage: virtualImage,
+				externalId  : imageExternalId,
+				imageRegion : cloud.regionCode,
+				code        : "proxmox.ve.image.${cloud.id}.${hvNode.externalId}.$imageExternalId",
+				internalId  : imageExternalId,
+				refId		: cloud.id,
+				refType		: 'ComputeZone',
+			])
+			context.async.virtualImage.location.create([virtualImageLocation], cloud).blockingGet()
+			log.debug("Created VirtualImageLocation for template $imageExternalId on node ${hvNode.externalId}")
+
 		} finally {
 			context.releaseLock(lockKey, [lock:lock]).blockingGet()
 		}
@@ -786,7 +888,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	 */
 	@Override
 	ServiceResponse finalizeWorkload(Workload workload) {
-		log.info("Finalizing proxmox VM: $workload.server.externalId")
+		log.debug("Finalizing proxmox VM: $workload.server.externalId")
 
 		return ServiceResponse.success()
 	}
@@ -837,8 +939,15 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 	 */
 	@Override
 	ServiceResponse restartWorkload(Workload workload) {
-		if (!(stopWorkload(workload).success && startWorkload(workload).success)) {
-			return ServiceResponse.error("Error restarting workload.")
+		def stopResult = stopWorkload(workload)
+		if (!stopResult.success) {
+			log.error("Failed to stop workload ${workload.id} during restart: ${stopResult.msg}")
+			return ServiceResponse.error("Error restarting workload: Failed to stop - ${stopResult.msg}")
+		}
+		def startResult = startWorkload(workload)
+		if (!startResult.success) {
+			log.error("Failed to start workload ${workload.id} during restart: ${startResult.msg}")
+			return ServiceResponse.error("Error restarting workload: Failed to start - ${startResult.msg}")
 		}
 		return ServiceResponse.success()
 	}
@@ -994,7 +1103,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 
 	@Override
 	ServiceResponse resizeServer(ComputeServer server, ResizeRequest resizeRequest, Map opts) {
-		log.info("resizeServer")
+		log.debug("resizeServer")
 
 		HttpApiClient resizeClient = new HttpApiClient()
 		List<ServiceResponse> responses = [
@@ -1006,7 +1115,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		def rtn = ServiceResponse.success()
 		responses.findAll {!it.success }.each {
 			rtn.success = false
-			rtn.error += "$it.error\n"
+			rtn.msg = (rtn.msg ?: '') + (it.msg ?: it.error ?: 'Unknown error') + '\n'
 		}
 
 		return rtn
@@ -1037,23 +1146,41 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				currentMemory = computeServer.maxMemory ?: computeServer.getConfigProperty('maxMemory')?.toLong()
 				currentCores = computeServer.maxCores ?: 1
 			}
-			def neededMemory = requestedMemory - currentMemory
-			def neededCores = (requestedCores ?: 1) - (currentCores ?: 1)
-			def allocationSpecs = [externalId: computeServer.externalId, maxMemory: requestedMemory, maxCpu: requestedCores]
-			if (neededMemory > 100000000l || neededMemory < -100000000l || neededCores != 0) {
-				log.debug("Resizing VM with specs: ${allocationSpecs}")
-				log.debug("Resizing vm: ${computeServer.name} with $server.coresPerSocket cores and $server.maxMemory memory")
+		def neededMemory = requestedMemory - currentMemory
+		def neededCores = (requestedCores ?: 1) - (currentCores ?: 1)
+		def allocationSpecs = [externalId: computeServer.externalId, maxMemory: requestedMemory, maxCpu: requestedCores]
+		if (neededMemory > 100000000l || neededMemory < -100000000l || neededCores != 0) {
+			log.debug("Resizing VM with specs: ${allocationSpecs}")
+			log.debug("Resizing vm: ${computeServer.name} with $computeServer.coresPerSocket cores and $computeServer.maxMemory memory")
 
-				ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, [], [])
+			def resizeResult = ProxmoxApiComputeUtil.resizeVM(resizeClient, authConfigMap, computeServer.parentServer.name, computeServer.externalId, requestedCores, requestedMemory, computeServer.volumes?.toList() ?: [], computeServer.interfaces?.toList() ?: [])
+
+			if (!resizeResult.success) {
+					log.error("Resize API call failed: ${resizeResult.msg}")
+					computeServer.status = 'provisioned'
+					computeServer.statusMessage = "Resize failed: ${resizeResult.msg}"
+					saveAndGet(computeServer)
+					return new ServiceResponse(success: false, msg: "Resize failed: ${resizeResult.msg}")
+				}
+
+				computeServer.maxMemory = requestedMemory
+				computeServer.maxCores = requestedCores
+				computeServer.coresPerSocket = 1
+			} else {
+				log.info("No resize needed - changes too small (neededMemory: ${neededMemory}, neededCores: ${neededCores})")
 			}
+
+			computeServer.status = 'provisioned'
+			computeServer.statusMessage = null
+			computeServer = saveAndGet(computeServer)
 		} catch (e) {
-			log.error("Unable to resize workload: ${e.message}", e)
+			log.error("Exception during resize workload: ${e.message}", e)
 			computeServer.status = 'provisioned'
 			computeServer.statusMessage = "Unable to resize server: ${e.message}"
 			saveAndGet(computeServer)
 			return new ServiceResponse(success: false, msg: "Unable to resize server: ${e.message}")
 		}
-		return new ServiceResponse(success: true, msg: "Server resized")
+		return new ServiceResponse(success: true, msg: "Server resized successfully")
 	}
 
 
@@ -1092,7 +1219,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 						externalId       : "scsi$nextScsi",
 						maxStorage       : newVMDisk.maxStorage,
 						refType          : "ComputeServer",
-						refId            : workload.server.id,
+						refId            : server.id,
 						name             : newVMDisk.name
 				]
 				if (newVMDisk.datastoreId == "auto") {
@@ -1105,7 +1232,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 				newVol.type = new StorageVolumeType(id: newVMDisk.storageType.toLong())
 				newVolumes << newVol
 			}
-			log.info("${newVolumes.size()} volumes to create")
+			log.debug("${newVolumes.size()} volumes to create")
 			context.async.storageVolume.create(newVolumes, server).blockingGet()
 			responses << ProxmoxApiComputeUtil.addVMDisks(resizeClient, authConfig, newVolumes, extNodeId, extServerId)
 		}
@@ -1115,7 +1242,7 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			StorageVolume existing = volumeUpdate.existingModel
 			Map updateProps = volumeUpdate.updateProps
 			if (updateProps.maxStorage > existing.maxStorage) {
-				log.info("resizing vm storage: {}", volumeUpdate)
+				log.debug("resizing vm storage: {}", volumeUpdate)
 				existing.maxStorage = updateProps.maxStorage as Long
 				context.services.storageVolume.save(existing)
 				responses << ProxmoxApiComputeUtil.resizeVMDisk(resizeClient, authConfig, existing, extNodeId, extServerId)
@@ -1123,7 +1250,8 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		}
 
 		if (responses.any{!it.success }) {
-			return new ServiceResponse(success: false, msg: "${responses.collect{'$it.error\n'}}")
+			def errorMessages = responses.findAll{!it.success}.collect{ it.msg ?: it.error ?: 'Disk operation failed' }.join("; ")
+			return new ServiceResponse(success: false, msg: errorMessages)
 		}
 		return new ServiceResponse(success: true, msg: "VM Disk Volumes Updated")
 	}
@@ -1138,9 +1266,9 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		def authConfigMap = plugin.getAuthConfig(server.cloud)
 		List<ServiceResponse> responses = []
 
-		log.info("Networks to Add: $resizeRequest.interfacesAdd")
-		log.info("Networks to Delete: $resizeRequest.interfacesDelete")
-		log.info("Networks to Update: $resizeRequest.interfacesUpdate")
+		log.debug("Networks to Add: $resizeRequest.interfacesAdd")
+		log.debug("Networks to Delete: $resizeRequest.interfacesDelete")
+		log.debug("Networks to Update: $resizeRequest.interfacesUpdate")
 
 		//delete
 		if (resizeRequest.interfacesDelete) {
@@ -1156,19 +1284,19 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		if (resizeRequest.interfacesAdd.each) {
 			int nicCounter = proxVMInterfaces.size()
 			resizeRequest.interfacesAdd.each { Map nic ->
-				log.info("NIC map: $nic")
+				log.debug("NIC map: $nic")
+				def networkObj = context.services.network.get(nic.network.id)
 				Map newInterfaceProps = [
 						externalId		: "net$nicCounter",
 						name			: "net$nicCounter",
-						network   		: context.services.network.get(nic.network.id),
-						dhcp			: nic.ntwork.dhcpServer,
+						network   		: networkObj,
+						dhcp			: nic.network?.dhcpServer,
 						primaryInterface: false
 				]
 				if (nic.ipAddress) {
 					newInterfaceProps["ipAddress"] = nic.ipAddress
 				}
 				nicCounter++
-
 				ComputeServerInterface newInterface = new ComputeServerInterface(newInterfaceProps)
 				newInterfaces << newInterface
 			}
@@ -1176,7 +1304,11 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 			context.async.computeServer.computeServerInterface.create(newInterfaces, server).blockingGet()
 		}
 
-		return new ServiceResponse()
+		if (responses.any{!it.success }) {
+			def errorMessages = responses.findAll{!it.success}.collect{ it.msg ?: it.error ?: 'Network operation failed' }.join("; ")
+			return new ServiceResponse(success: false, msg: errorMessages)
+		}
+		return new ServiceResponse(success: true, msg: "VM Network Interfaces Updated")
 	}
 
 
@@ -1209,5 +1341,13 @@ class ProxmoxVeProvisionProvider extends AbstractProvisionProvider implements Vm
 		return true
 	}
 
+	@Override
+	Boolean hasComputeZonePools() {
+		return true
+	}
 
+	@Override
+	Boolean computeZonePoolRequired() {
+		return false
+	}
 }
